@@ -235,8 +235,7 @@ with tab_out:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=t_dates, y=res["A"].series("utilisation")[0], name="A margin utilisation", line={"color": COLORS["A"]}))
             fig.add_trace(go.Scatter(x=t_dates, y=res["B"].series("cash")[0] / res["B"].nav[0], name="B cash / NAV", line={"color": COLORS["B"]}))
-            fig.add_trace(go.Scatter(x=t_dates, y=res["B"].series("equity_exposure")[0] / np.maximum(res["A"].series("equity_exposure")[0], 1), name="B exposure / A exposure", line={"color": "#888"}))
-            fig.update_layout(title="A: margin utilisation (call at 1.0) · B: cash share and exposure vs A", template="plotly_white", height=360, legend={"orientation": "h"})
+            fig.update_layout(title="A: margin utilisation (call at 1.0) · B: cash share of NAV", template="plotly_white", height=360, legend={"orientation": "h"})
             st.plotly_chart(fig, width="stretch")
         # ---------------- yearly table
         yrs_idx = t_dates.dt.year.to_numpy()
