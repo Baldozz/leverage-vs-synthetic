@@ -18,7 +18,7 @@ def balance_sheet_frame(res: StrategyResult, paths: MarketPaths, path: int) -> p
         "step": np.arange(g.n_steps + 1), "t_years": g.t, "month": g.month_index, "is_month_end": g.is_month_end,
         "index_level": paths.S[path, :, 0], "held_level": paths.held[path], "iv_short": paths.iv_short[path], "r_short": paths.r_short[path],
     }
-    for s in ("cash", "loan", "held_mv", "spot_mv", "option_mv", "illiquid_mv", "illiquid_true", "swap_mtm", "nav", "nav_true", "nav_bid",
+    for s in ("cash", "loan", "accrued_interest", "held_mv", "spot_mv", "option_mv", "illiquid_mv", "illiquid_true", "swap_mtm", "nav", "nav_true", "nav_bid",
               "utilisation", "lending_value", "loan_rate", "cash_rate", "option_rate_5y", "dollar_delta", "dollar_delta_smile", "dollar_gamma",
               "vega_1pt", "theta_year", "rho_100bp", "dq_100bp", "n_tranches", "futures_notional", "effective_leverage", "equity_exposure"):
         cols[s] = res.series(s)[path]

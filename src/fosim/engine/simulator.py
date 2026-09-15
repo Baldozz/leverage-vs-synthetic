@@ -501,12 +501,22 @@ class Simulator:
         alive = st.alive
         # 3. interest on start-of-step balances at rates fixed at k
         loan_i = self.loan_terms.interest(st.loan, st.loan_rate, grid.days) * alive
-        if self.cfg.leverage.interest == "pay_cash":
+        lev_cfg = self.cfg.leverage
+        if lev_cfg.interest == "pay_cash":
             st.cash -= loan_i
-        else:
+            ctx.ledger.post(k1, "cash", -loan_i, "loan interest paid")
+        elif lev_cfg.capitalisation_frequency == "step":
             st.loan += loan_i
+            ctx.ledger.post(k1, "loan", loan_i, "loan interest capitalised")
+        else:
+            # monthly roll: accrue on the balance fixed at the last roll, add to the principal at month-end
+            st.accrued_interest += loan_i
+            ctx.ledger.post(k1, "accrued_interest", loan_i, "loan interest accrued (added to the loan at the monthly roll)")
+            if grid.is_month_end[k1]:
+                ctx.ledger.post(k1, "loan", st.accrued_interest, "monthly roll: accrued interest capitalised into the loan")
+                st.loan += st.accrued_interest
+                st.accrued_interest[:] = 0.0
         ctx.add_component(k1, "loan_interest", -loan_i)
-        ctx.ledger.post(k1, "cash" if self.cfg.leverage.interest == "pay_cash" else "loan", -loan_i if self.cfg.leverage.interest == "pay_cash" else loan_i, "loan interest")
         cash_rate = self.paths.r_short[:, k] - self.cfg.rates.cash.spread
         ci = cash_interest(st.cash, self.paths.r_short[:, k], self.cfg.rates.cash.spread, grid.days, self.cfg.leverage.day_count, st.loan_rate) * alive
         st.cash += ci
@@ -661,7 +671,7 @@ class Simulator:
         st = ctx.state
         ev = ctx.events
         lv = self.lending_value_now(ctx, k1)
-        u = utilisation(st.loan, lv)
+        u = utilisation(st.loan + st.accrued_interest, lv)
         alive = st.alive & (st.loan > 0)
         ev.min_headroom = np.minimum(ev.min_headroom, np.where(alive, 1.0 - u, np.inf))
         ctx.recorder.series["utilisation"][:, k1] = u
@@ -683,7 +693,7 @@ class Simulator:
         ctx.ledger.post(k1, "loan", -R, "margin cure: repay from cash", R > 0)
         ctx.ledger.post(k1, "cash", -R, "margin cure: repay from cash", R > 0)
         lv = self.lending_value_now(ctx, k1)
-        u = utilisation(st.loan, lv)
+        u = utilisation(st.loan + st.accrued_interest, lv)
         still = alive & (u >= th.call)
         closeout = alive & (u >= th.closeout)
         grace_steps = int(np.floor(cfg.cure_grace_days / self.grid.days + 1e-9))
@@ -723,7 +733,7 @@ class Simulator:
             ctx.ledger.post(k1, "memo:slippage", -(x * s), f"margin {label}: slippage loss on assets sold (non-cash memo)", mask)
             ctx.ledger.post(k1, "memo:asset_sale", -x, f"margin {label}: assets sold at market value (non-cash memo)", mask)
             lv = self.lending_value_now(ctx, k1)
-            u = utilisation(st.loan, lv)
+            u = utilisation(st.loan + st.accrued_interest, lv)
             st.grace_clock[mask] = 0
         ctx.recorder.series["utilisation"][:, k1] = u
         ctx.recorder.series["lending_value"][:, k1] = lv
@@ -741,6 +751,7 @@ class Simulator:
         # freeze: liquidate everything at the current marks, net against the loan; positions to zero
         st.cash[new_ruin] = nav[new_ruin]
         st.loan[new_ruin] = 0.0
+        st.accrued_interest[new_ruin] = 0.0
         st.held_units[new_ruin] = 0.0
         st.held_mv[new_ruin] = 0.0
         st.spot_units[new_ruin] = 0.0
@@ -768,7 +779,7 @@ class Simulator:
         with np.errstate(divide="ignore", invalid="ignore"):
             eff_lev = np.where(st.nav > 0, (st.held_mv + st.spot_mv) / np.maximum(st.nav, 1e-300), np.nan)
         r.record(
-            k, nav=st.nav, nav_true=nav_true, nav_bid=st.nav - st.option_mv + st.option_mv_bid, cash=st.cash, loan=st.loan,
+            k, nav=st.nav, nav_true=nav_true, nav_bid=st.nav - st.option_mv + st.option_mv_bid, cash=st.cash, loan=st.loan, accrued_interest=st.accrued_interest,
             held_mv=st.held_mv, spot_mv=st.spot_mv, option_mv=st.option_mv, illiquid_mv=st.illiquid_mv, illiquid_true=ill_true,
             loan_rate=st.loan_rate, cash_rate=(cash_rate if cash_rate is not None else self.paths.r_short[:, k] - self.cfg.rates.cash.spread),
             option_rate_5y=self.paths.zero_rate(k, self.cfg.options.tenor_years) + self.cfg.pricing.option_funding_spread,

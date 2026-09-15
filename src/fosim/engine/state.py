@@ -42,6 +42,7 @@ class PortfolioState:
     cash: F64 = field(init=False)
     loan: F64 = field(init=False)
     loan_rate: F64 = field(init=False)  # contractual rate fixed at the last reset
+    accrued_interest: F64 = field(init=False)  # capitalised-monthly loans: interest accrued since the last roll (liability)
     held_units: F64 = field(init=False)  # held equity portfolio units (level H)
     spot_units: F64 = field(init=False)  # (P, n_idx) deployed spot index units
     spot_cost_basis: F64 = field(init=False)  # USD paid for deployed spot (dry powder ROI)
@@ -81,6 +82,7 @@ class PortfolioState:
         self.cash = np.zeros(P)
         self.loan = np.zeros(P)
         self.loan_rate = np.zeros(P)
+        self.accrued_interest = np.zeros(P)
         self.held_units = np.zeros(P)
         self.spot_units = np.zeros((P, n))
         self.spot_cost_basis = np.zeros(P)
@@ -108,7 +110,7 @@ class PortfolioState:
         self.dq_100bp = np.zeros(P)
 
     def total_nav(self) -> F64:
-        out: F64 = self.cash - self.loan + self.held_mv + self.spot_mv + self.option_mv + self.illiquid_mv + self.swap_mtm
+        out: F64 = self.cash - self.loan - self.accrued_interest + self.held_mv + self.spot_mv + self.option_mv + self.illiquid_mv + self.swap_mtm
         return out
 
 
@@ -122,7 +124,7 @@ class StepRecorder:
     components: F64 = field(init=False)
 
     SERIES: tuple[str, ...] = (
-        "nav", "nav_true", "nav_bid", "cash", "loan", "held_mv", "spot_mv", "option_mv", "illiquid_mv", "illiquid_true",
+        "nav", "nav_true", "nav_bid", "cash", "loan", "accrued_interest", "held_mv", "spot_mv", "option_mv", "illiquid_mv", "illiquid_true",
         "utilisation", "lending_value", "loan_rate", "cash_rate", "option_rate_5y", "dollar_delta", "dollar_delta_smile",
         "dollar_gamma", "vega_1pt", "theta_year", "rho_100bp", "dq_100bp", "n_tranches", "futures_notional", "swap_mtm",
         "effective_leverage", "equity_exposure", "spot_cost_basis",

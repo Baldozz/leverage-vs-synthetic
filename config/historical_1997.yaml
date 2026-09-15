@@ -20,7 +20,8 @@ leverage:
   ratio_of_nav: 0.25
   allocation_of_borrowed_funds: pro_rata     # pro_rata | equity_only
   day_count: ACT/360                         # ACT/360 | ACT/365
-  interest: pay_cash                         # pay_cash | capitalise
+  interest: capitalise                       # loan rolled monthly, interest added to the principal (user assumption)
+  capitalisation_frequency: monthly
   ltv_base: {equity_index: 0.50, illiquid: 0.00, cash: 0.90}      # PLACEHOLDER
   ltv_stress_schedule:                       # h(state): multiplier applied when trigger breached
     - {iv_short_above: 0.35, index_drawdown_below: null, multiplier: 0.80}

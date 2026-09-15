@@ -6,6 +6,8 @@
 35. Base-rate floor, spread tier switching at the configured thresholds, commitment fee hand-check.
 """
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -102,3 +104,40 @@ def test_35_floor_tiers_commitment_fee() -> None:
     assert abs(float(mtm[0])) < 250e6 * 0.01
     mtm_up = t3.swap_mtm(np.array([250e6]), lambda tau: np.array([0.06]), 0.0)
     assert float(mtm_up[0]) > float(mtm[0])  # pay-fixed gains when rates rise
+
+
+def test_20b_monthly_capitalisation_on_weekly_grid(raw: dict[str, Any]) -> None:
+    """Loan rolled monthly on a weekly grid: interest accrues each week on the balance fixed at the last roll and is
+    added to the principal at month-end → after one year the loan equals 250 · Π_m (1 + r · days_m/360) with
+    days_m = (weeks in month m) · 365/52; no cash leaves the account for interest."""
+    from tests.conftest import make_cfg, zero_vol_overrides
+
+    from fosim.runner import run_config
+
+    cfg = make_cfg(
+        raw,
+        **zero_vol_overrides(**{
+            "run.n_paths": 1, "run.horizon_years": 1, "run.dt": "weekly", "leverage.interest": "capitalise", "leverage.capitalisation_frequency": "monthly",
+            "rates.usd.r0": 0.04, "loan_terms.spread_tiers": [{"utilisation_below": 1.0, "spread": 0.01}], "loan_terms.base_floor": 0.0,
+            "equity_indices.1.dividend_yield": 0.0, "illiquids.1.unfunded_commitments": 0, "illiquids.2.unfunded_commitments": 0, "dry_powder.enabled": False,
+        }),
+    )
+    out = run_config(cfg, ledger_paths=[0])
+    a = out.results["A"]
+    g = out.paths.grid
+    loan = 250e6
+    weeks_in_month = 0
+    for k in range(1, g.n_steps + 1):
+        weeks_in_month += 1
+        if g.is_month_end[k]:
+            loan *= 1 + 0.05 * (weeks_in_month * g.days) / 360.0
+            weeks_in_month = 0
+    assert a.series("loan")[0, -1] == pytest.approx(loan, rel=1e-12)
+    assert a.series("accrued_interest")[0, -1] == pytest.approx(0.0, abs=1e-6)  # step 52 is a month-end
+    # intra-month the accrued liability is in NAV: loan + accrued grows every week
+    debt = a.series("loan")[0] + a.series("accrued_interest")[0]
+    assert (np.diff(debt) > 0).all()
+    # nothing was paid from cash for interest
+    led = a.ledger.to_frame()
+    assert not led[(led.account == "cash") & led.description.str.contains("interest paid")].shape[0]
+    assert a.series("loan")[0, -1] / 250e6 - 1 == pytest.approx(12.972 / 250, abs=2e-4)  # ≈ spec test 20 monthly figure

@@ -101,6 +101,7 @@ class LeverageConfig(_Base):
     allocation_of_borrowed_funds: Literal["pro_rata", "equity_only"] = "pro_rata"
     day_count: DayCount = "ACT/360"
     interest: Literal["pay_cash", "capitalise"] = "pay_cash"
+    capitalisation_frequency: Literal["monthly", "step"] = "monthly"  # capitalise: add accrued interest to the loan at month-ends (monthly roll) or every step
     ltv_base: LtvBase = LtvBase()
     ltv_stress_schedule: list[LtvStressRule] = []
     thresholds: MarginThresholds = MarginThresholds()

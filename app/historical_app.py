@@ -100,7 +100,7 @@ with tab_in:
         n_months = round((pd.Timestamp(end) - pd.Timestamp(start)).days / 30.4375)
         st.caption(f"{n_months} months of history · {'weekly' if freq == 'week' else 'monthly'} steps")
         st.subheader("Historical inputs — blank = model placeholder")
-        lombard = pct_input("All-in Lombard cost (% p.a.)", "Base rate + spread paid on the loan, held constant over the period.", "lombard")
+        lombard = pct_input("All-in Lombard cost (% p.a.)", "Base rate + spread on the loan, held constant. The loan is rolled monthly: interest accrues weekly on the balance and is added to the principal at each month-end (not paid from cash).", "lombard")
         cash_y = pct_input("Cash yield on dry powder (% p.a.)", "Also the risk-free rate used to price and discount the options.", "cashy")
         prem = pct_input(f"{tenor}y ATM call premium (% of notional, underlying SPXFP)", "Price of a fresh at-the-money long-dated call at every purchase, held constant. Blank → parametric implied-vol placeholder.", "prem")
         div = st.number_input("SPX dividend yield received by A/C (% p.a.)", 0.0, 6.0, 1.8, 0.1) / 100.0
@@ -263,6 +263,7 @@ with tab_out:
             f"- Cash yield / risk-free rate: **{(meta['cash'] if meta['cash'] is not None else mk.cash_rate):.2%}** p.a. {'(placeholder)' if meta['cash'] is None else ''}\n"
             f"- {cfg.options.tenor_years:g}y ATM call premium on SPXFP: **{float(bs.attrs['tranche']['premium_pct']):.2%}** of notional {prem_note}; delta {float(bs.attrs['tranche']['delta']):.3f}\n"
             f"- Inception: A equities {bs.loc['A', 'equities'] / M:,.0f} m / loan {bs.loc['A', 'loan'] / M:,.0f} m; B target book {cfg.options.target_total_notional / M:,.0f} m notional bought {cfg.options.notional_per_purchase / M:,.2f} m per {cfg.options.purchase_frequency[:-2]} (premium at the target ≈ {bs.loc['B', 'options_premium'] / M:,.0f} m); illiquids {bs.loc['A', 'illiquids'] / M:,.0f} m in all strategies.\n"
+            f"- Loan: rolled monthly, interest capitalised into the principal (ACT/360); A's loan at the end: {res['A'].series('loan')[0, -1] / M:,.0f} m.\n"
             f"- Illiquids: deterministic expected drift (HF 6 %, PE 10 %, Infra 8 % p.a. placeholders) with capital calls/distributions; identical across strategies."
         )
         tmp = PROJECT_ROOT / "reports" / "historical_audit.xlsx"
