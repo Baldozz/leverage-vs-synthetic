@@ -92,7 +92,18 @@ with tab_in:
         n_buys = int(np.ceil(target / per))
         st.caption(f"{n_buys} purchases to reach the target (≈ {n_buys / (52 if freq == 'week' else 12):.1f} years); expired tranches are replaced so the book stays at the target. Tranches are held to expiry (cash-settled).")
         tenor = st.selectbox("Option tenor (years)", [1, 2, 3, 5, 7, 10], index=3)
-        dry = st.checkbox("Deploy dry powder into SPX after drawdowns (−20/−30/−40 % tiers of deployable cash)", value=False)
+        dry = st.checkbox("Deploy dry powder into MORE CALLS after SPX drawdowns (B only)", value=False, help="At each month-end, if the SPX drawdown from its running peak reaches a tier, B spends the tier's share of deployable cash (cash minus the liquidity reserve) on additional ATM calls of the same tenor. Each tier fires once per drawdown episode; re-armed at a new peak.")
+        if dry:
+            t1, t2, t3 = st.columns(3)
+            tier_dd = [t1.number_input("Tier 1 drawdown", -0.9, -0.01, -0.20, 0.05, format="%.2f"), t2.number_input("Tier 2 drawdown", -0.9, -0.01, -0.30, 0.05, format="%.2f"), t3.number_input("Tier 3 drawdown", -0.9, -0.01, -0.40, 0.05, format="%.2f")]
+            tier_pct = [t1.number_input("Tier 1: % of deployable cash", 0.0, 1.0, 0.33, 0.05), t2.number_input("Tier 2: % of deployable cash", 0.0, 1.0, 0.50, 0.05), t3.number_input("Tier 3: % of deployable cash", 0.0, 1.0, 1.00, 0.05)]
+            reserve_pct = st.number_input("Liquidity reserve kept back (% of NAV)", 0.0, 0.5, 0.03, 0.01)
+        st.subheader("Lombard lending values (advance rates)")
+        l1, l2, l3 = st.columns(3)
+        ltv_eq = l1.number_input("LTV on listed equities", 0.0, 1.0, 0.50, 0.05)
+        ltv_ill = l2.number_input("LTV on illiquids", 0.0, 1.0, 0.0, 0.05)
+        ltv_cash = l3.number_input("LTV on cash", 0.0, 1.0, 0.90, 0.05)
+        st.caption("Lending value = Σ LTV × market value; margin call when the loan (incl. accrued interest) exceeds it. Long options have no lending value.")
     with c2:
         st.subheader("Period")
         start = st.selectbox("Start investing at", dates, index=0)
@@ -132,6 +143,12 @@ with tab_in:
         d["options"]["tenor_years"] = float(tenor)
         d["options"]["hold_months_before_roll"] = min(12, int(tenor * 12))
         d["dry_powder"]["enabled"] = dry
+        d["dry_powder"]["instrument"] = "call_tranches"
+        if dry:
+            order = sorted(range(3), key=lambda i: -tier_dd[i])  # mildest first
+            d["dry_powder"]["tiers"] = [{"index_drawdown": float(tier_dd[i]), "iv_short_above": None, "deploy_pct_of_deployable": float(tier_pct[i])} for i in order]
+            d["dry_powder"]["liquidity_reserve"]["floor_pct_nav"] = float(reserve_pct)
+        d["leverage"]["ltv_base"] = {"equity_index": float(ltv_eq), "illiquid": float(ltv_ill), "cash": float(ltv_cash)}
         spx = next(i for i, e in enumerate(d["equity_indices"]) if e["name"] == "SPX")
         d["equity_indices"][spx]["dividend_yield"] = div
         d["equity_indices"][spx]["dividend_wht"] = wht
@@ -263,8 +280,9 @@ with tab_out:
             f"- Cash yield / risk-free rate: **{(meta['cash'] if meta['cash'] is not None else mk.cash_rate):.2%}** p.a. {'(placeholder)' if meta['cash'] is None else ''}\n"
             f"- {cfg.options.tenor_years:g}y ATM call premium on SPXFP: **{float(bs.attrs['tranche']['premium_pct']):.2%}** of notional {prem_note}; delta {float(bs.attrs['tranche']['delta']):.3f}\n"
             f"- Inception: A equities {bs.loc['A', 'equities'] / M:,.0f} m / loan {bs.loc['A', 'loan'] / M:,.0f} m; B target book {cfg.options.target_total_notional / M:,.0f} m notional bought {cfg.options.notional_per_purchase / M:,.2f} m per {cfg.options.purchase_frequency[:-2]} (premium at the target ≈ {bs.loc['B', 'options_premium'] / M:,.0f} m); illiquids {bs.loc['A', 'illiquids'] / M:,.0f} m in all strategies.\n"
-            f"- Loan: rolled monthly, interest capitalised into the principal (ACT/360); A's loan at the end: {res['A'].series('loan')[0, -1] / M:,.0f} m.\n"
-            f"- Illiquids: deterministic expected drift (HF 6 %, PE 10 %, Infra 8 % p.a. placeholders) with capital calls/distributions; identical across strategies."
+            f"- Loan: rolled monthly, interest capitalised into the principal (ACT/360); A's loan at the end: {res['A'].series('loan')[0, -1] / M:,.0f} m. LTVs: equities {cfg.leverage.ltv_base.equity_index:.0%}, illiquids {cfg.leverage.ltv_base.illiquid:.0%}, cash {cfg.leverage.ltv_base.cash:.0%}.\n"
+            + (f"- Dry powder: B bought additional calls at {len(cfg.dry_powder.tiers)} drawdown tiers ({', '.join(f'{t.index_drawdown:.0%}→{t.deploy_pct_of_deployable:.0%}' for t in cfg.dry_powder.tiers)}); deployed {res['B'].events.dry_powder_deployed_usd[0] / M:,.0f} m in {int(res['B'].events.dry_powder_deployments[0])} deployments.\n" if cfg.dry_powder.enabled else "- Dry powder deployment: off.\n")
+            + "- Illiquids: deterministic expected drift (HF 6 %, PE 10 %, Infra 8 % p.a. placeholders) with capital calls/distributions; identical across strategies."
         )
         tmp = PROJECT_ROOT / "reports" / "historical_audit.xlsx"
         if st.button("Export the full ledger / balance sheet to Excel"):

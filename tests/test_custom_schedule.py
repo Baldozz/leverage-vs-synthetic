@@ -88,3 +88,30 @@ def test_monthly_frequency_and_validation(raw: dict[str, Any]) -> None:
         make_cfg(raw, **{"options.ladder_mode": "fixed_notional_schedule", "options.purchase_frequency": "weekly", "options.notional_per_purchase": 1e6, "options.target_total_notional": 1e7})
     with pytest.raises(Exception, match="fixed_notional_schedule requires"):
         make_cfg(raw, **{"options.ladder_mode": "fixed_notional_schedule"})
+
+
+def test_dry_powder_into_calls_sits_on_top_of_the_schedule(raw: dict[str, Any]) -> None:
+    """With instrument=call_tranches the deployments buy extra ATM tranches (origin 2) that do not count toward the
+    scheduled book's target, and the schedule keeps its own tranches at the target."""
+    cfg = _custom(
+        raw,
+        **{
+            "historical.start": "2007-10-31", "run.horizon_years": 3, "run.dt": "monthly", "historical.file": "data/SPX_SPXFP_aligned_monthly.csv",
+            "options.purchase_frequency": "monthly", "options.notional_per_purchase": 50e6, "options.target_total_notional": 500e6,
+            "dry_powder.enabled": True, "dry_powder.instrument": "call_tranches",
+            "dry_powder.tiers": [{"index_drawdown": -0.20, "deploy_pct_of_deployable": 0.3}, {"index_drawdown": -0.40, "deploy_pct_of_deployable": 0.5}],
+        },
+    )
+    out = run_config(cfg, ledger_paths=[0])
+    b = out.results["B"]
+    tr = b.ledger.tranche_frame()
+    assert b.events.dry_powder_deployments[0] == 2 and b.events.dry_powder_deployed_usd[0] > 0
+    last = tr[tr.step == out.paths.n_steps]
+    sched = last[last.origin == 0]["notional_usd"].sum()
+    extra = last[last.origin == 2]["notional_usd"].sum()
+    assert sched == pytest.approx(500e6, rel=1e-9)  # the schedule still fills its target
+    assert extra > 0  # plus the dry-powder tranches on top
+    led = b.ledger.to_frame()
+    assert led.description.str.contains("dry powder tier").any()
+    # no spot was bought
+    assert b.series("spot_mv").max() == 0.0

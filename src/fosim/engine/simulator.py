@@ -423,6 +423,8 @@ class Simulator:
             # upper bound on concurrently alive tranches: one purchase per purchase step over the option's life
             # (partial, cash-constrained purchases can exceed target / notional_per_purchase)
             max_alive = int(np.ceil(cfg.options.tenor_years * self.grid.steps_per_year / max(steps_per_purchase, 1))) + 2
+            if cfg.dry_powder.enabled and cfg.dry_powder.instrument == "call_tranches":
+                max_alive += 12 * len(cfg.dry_powder.tiers) * int(np.ceil(cfg.options.tenor_years))  # room for episode purchases living a full tenor
             extra = max(extra, max_alive)
         self._n_logical_slots = n_ladder + extra
         ctxs: list[StrategyContext] = []

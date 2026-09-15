@@ -79,7 +79,8 @@ class CallReplacementStrategy:
         assert st.book is not None
         per = opt.notional_pct_nav * st.nav if opt.notional_pct_nav is not None else np.full(st.P, float(opt.notional_per_purchase or 0.0))
         if opt.target_total_notional is not None:
-            active = (st.book.notional * st.book.active).sum(axis=1)
+            # only the scheduled tranches (origin 0) count toward the target; dry-powder / rebalance tranches sit on top
+            active = (st.book.notional * st.book.active * (st.book.origin == 0)).sum(axis=1)
             notional = np.minimum(np.maximum(opt.target_total_notional - active, 0.0), per)
         else:
             notional = per  # no cap: keep adding every purchase step
