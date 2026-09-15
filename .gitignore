@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+reports/*.xlsx
+reports/*.html
+reports/*.xml
+.DS_Store
+~$*.xlsx

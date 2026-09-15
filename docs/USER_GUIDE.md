@@ -1,0 +1,57 @@
+# USER_GUIDE.md
+
+## Two apps
+* **Historical replay (simple)** — `.venv/bin/streamlit run app/historical_app.py`: pick capital, allocation, leverage, start date and Strategy B choices; leave the three historical inputs blank (Lombard cost, cash yield, LT option premium) or fill them; enter each strategy's starting balance sheet (equities / loan / cash, common illiquids) in the table, choose how B accumulates its option book (notional bought per week or month, target book, tenor), and press *Run historical replay* to see what A, B and C would have done through the actual S&P 500 history (weekly or monthly steps). No Monte Carlo.
+* **Full simulator (9 tabs)** — `.venv/bin/streamlit run app/streamlit_app.py`: Monte Carlo, risk, sensitivity, stress, audit (SPEC §10).
+
+## Install and run
+```bash
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m pytest                       # full validation suite
+.venv/bin/python -m fosim.reporting.validation_report   # → reports/validation_report.html
+.venv/bin/streamlit run app/streamlit_app.py     # UI
+```
+Programmatic use:
+```python
+from fosim.config import load_config
+from fosim.runner import run_config, with_overrides
+cfg = load_config("config/default.yaml")
+out = run_config(with_overrides(cfg, {"run.n_paths": 5000}), ledger_paths=[0])
+out.results["B"].nav            # (paths, steps+1) NAV array
+```
+
+## Configuration (`config/default.yaml`)
+Every number is a **PLACEHOLDER**. The schema (`src/fosim/config/schema.py`) rejects unknown keys, non-USD currency fields, FX/quanto inputs, inconsistent weights and tenor grids. Key blocks:
+
+| Block | What it controls |
+|---|---|
+| `run` | paths, horizon, `dt` (monthly/weekly/daily), seed, label |
+| `portfolio`, `leverage`, `loan_terms` | NAV, split, leverage ratio and allocation, LTVs and stress schedule, thresholds, slippage, Lombard term sheet (SOFR convention, floor, tiers, fees, limit, fixed/swapped) |
+| `held_equity_portfolio`, `equity_indices`, `equity_model` | A's actual book (betas, tracking error, alpha); indices (P-measure returns, realised dividends, underlying type, pricing dividend curve, jump sizes); GBM / Merton / coupled stoch-vol / bootstrap |
+| `implied_vol`, `pricing` | log-OU short vol, term structure θ_T and β(T), skew, floor; price sources (dealer quotes, surface CSV, parametric, overrides, historical IV), bid/ask, funding spread, commissions, arbitrage check |
+| `options`, `exposure`, `dry_powder` | tenor, strike and sizing modes, ladder mode, build-up/hold months, resize rule, IV pause, extra slots, counterparty; exposure policies and target; dry-powder tiers, reserve, exit rule |
+| `illiquids`, `illiquids_marking` | HF/PE/Infra returns, smoothing, reporting frequency, TA cash-flow model, crisis multipliers; which marks feed margin and risk metrics |
+| `correlation`, `costs`, `spending`, `analytics` | driver correlation matrix, trading costs, spending, CRRA γ, percentiles, VaR levels |
+
+### Data files
+* **Bootstrap / replay**: CSV with `date` and level/return columns; map roles in `bootstrap.columns` (`{SPX: px_last, IV: vix, RATES: sofr}`). Provided: `data/SPX_daily.csv`, `data/SPX_monthly.csv`, `data/SPXFP_daily.csv`, `data/SPXFP_monthly.csv` (from the user's Bloomberg export; no market data is hard-coded).
+* **Vol surface**: CSV `tenor, moneyness (K/F), iv` or `tenor, delta, iv`; calendar and butterfly arbitrage are checked (`pricing.arbitrage_check`).
+* **Curve**: CSV `tenor, rate` (zero or par; `rates.curve_type`).
+* **Dealer quotes**: `pricing.dealer_quotes: [{index, tenor, strike_pct_spot, bid_pct, ask_pct | bid_iv, ask_iv, quote_date, spot, rate, dividend}]`.
+
+## UI tabs
+1. **Assumptions** — edit/load/save YAML, upload data, quick edits, timestamped changelog.
+2. **Inception** — balance sheets, sizing × strike table, put–call parity, carry, d*.
+3. **Simulation** — run (sidebar), NAV fans, terminal and B−A distributions, summary metrics with SEs, dominance, lenses.
+4. **Risk** — drawdowns, utilisation fans, VaR/CVaR, margin/liquidation/ruin statistics.
+5. **Liquidity & dry powder** — cash fans, illiquid flows, deployment, LCR.
+6. **Option book & exposure** — static breakeven chart, participation profile, delta/value grid, tranche table with price source, Greeks, mid vs bid, exposure vs A, Greek explain.
+7. **Sensitivity** — tornado, heatmaps, breakeven solver (common random numbers).
+8. **Stress tests** — editable stylised templates (labelled not historical) and historical replay from user files, with event markers.
+9. **Audit** — ledger viewer, Excel single-path export, validation report.
+The sidebar builds the **IC report** (HTML; print to PDF from the browser).
+
+## Reading the results
+* `notional_match` B has ≈ 64% of A's dollar-delta at the reference inputs; compare on the equal-delta lens before concluding.
+* Monthly steps understate margin-call frequency; daily runs (fewer paths) are the reference for margin-risk statements.
+* Sharpe/Sortino use smoothed illiquid marks; `nav_true` series use true marks.

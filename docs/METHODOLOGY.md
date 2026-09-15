@@ -1,0 +1,73 @@
+# METHODOLOGY.md
+
+Notation: all amounts in USD (`float64`), time in years, `dt` = 1/12 (monthly), 1/52 or 1/252.
+P = real-world measure (path simulation, `fosim.market`); Q = risk-neutral measure (option
+pricing, `fosim.pricing`). Each formula names its implementation and the test that checks it.
+
+## 1. Conventions (SPEC §3) — `fosim/engine/conventions.py`, tests `test_00_conventions.py`
+| Item | Formula / rule | Implementation |
+|---|---|---|
+| Steps per year | 12 / 52 / 252 | `steps_per_year` |
+| Calendar days per step (accrual) | 365 / steps_per_year | `days_per_step` |
+| Money-market accrual | simple interest, days/360 (ACT/360, default) or days/365 | `accrual_factor` |
+| Option year fraction | continuous compounding, T = (expiry step − k)/steps_per_year (ACT/365 equivalent) | `option_ladder._slot_inputs` |
+| Arithmetic expected return μ_a | m = ln(1+μ_a); log-mean/yr = m − σ²/2 | `continuous_drift`, `log_mean_per_year` |
+| Geometric expected return g | log-mean/yr = ln(1+g); m = ln(1+g) + σ²/2 | same |
+| Continuous dividend yield | q_c = ln(1 + q) | `continuous_dividend_yield` |
+| Dividend cash per step | D = u·S_{t+dt}·(e^{q_c dt} − 1)·(1 − WHT) | `dividend_cash`; engine step 4 |
+| Annual flow rate → per step | r_step = 1 − (1 − r)^{dt} | `per_step_rate` |
+| Month-end steps | ⌊12 t + 1e-9⌋ increases at step k | `TimeGrid.build` |
+
+## 2. Market models (P) — `fosim/market/*`, tests `test_07_14_market.py`, `test_market_bootstrap_stress.py`
+**Random streams** (`generator.spawn_streams`): `SeedSequence(seed).spawn(10)` in the fixed order equity, held, illiquids, iv, rates, jump_clock, jump_size, iv_jump, bootstrap, counterparty; all drawn every run (test 14). Correlated shocks Z_corr = Z_indep · Lᵀ, L = Cholesky of the validated matrix over [indices…, illiquids…, IV, RATES] (`correlation.validate_correlation`; Higham 2002 repair with warning, test 9).
+
+**Equity index i** (`equity.simulate_indices`):
+- GBM (exact): ln S_{t+dt} = ln S_t + (m − q_c^{px} − σ²/2) dt + σ√dt Z (test 7). q_c^{px} = q_c (price return), 0 (total return), q_c − ln(1 + q(1 − WHT)) (net total return).
+- Merton: + Σ_{N_t} J, N ~ Poisson(λ dt) common across indices, J ~ N(μ_J, σ_J²) index-specific; compensator −λκ dt, κ = e^{μ_J + σ_J²/2} − 1 (test 8).
+- Coupled stochastic vol: σ_t = IV_s,t (1 − vrp) at the start of the step.
+- Held portfolio: Δln H = Σβ_i Δln S_i + (α − σ_ε²/2)dt + σ_ε√dt ε (`simulate_held_portfolio`, test 38).
+- Stationary block bootstrap (Politis–Romano, `bootstrap.py`): geometric block lengths with mean L, rows resampled jointly, optional re-centring of index log-means to (m − q_c^{px} − σ²/2)dt.
+
+**Implied vol** (`implied_vol.simulate_iv_short`): x = ln IV_s, x_{t+dt} = x_t e^{−κdt} + ln θ(1 − e^{−κdt}) + η√((1 − e^{−2κdt})/(2κ)) Z_IV + j_IV N_t, clipped to [floor, cap]; stationary mean ln θ, variance η²/(2κ) (test 11).
+
+**Rates** (`rates.py`): flat (constant or user term structure); Vasicek exact step r_{t+dt} = r_t e^{−a dt} + b(1 − e^{−a dt}) + σ_r √((1 − e^{−2a dt})/(2a)) Z_r, P(τ) = exp(A − B r), B = (1 − e^{−aτ})/a, A = (B − τ)(a²b − σ_r²/2)/a² − σ_r²B²/(4a), y = −ln P/τ (+ term premium) (test 10); curve: par bootstrap (annual coupons) → log DF, linear in log DF, shifts parallel / steepener / flattener / buckets (test 34). Derived: loan base = r_t, cash = r_t − spread_cash, option rate = y_t(τ) + funding spread.
+
+**Illiquids** (`illiquids.py`): ln(1+G) = (m − σ²/2)dt + σ√dt Z + β_J J − λ(e^{β_J μ_J + β_J²σ_J²/2} − 1)dt; Geltner on the unit growth index I_true = Π(1+G): at report dates r_true = I_true/I_true,last − 1, r_obs = (1−φ) r_true + φ r_obs,prev, I_obs ← I_obs(1 + r_obs); NAV_rep = NAV_true · I_obs,last / I_true (test 12). Takahashi–Alexander: C = RC_step U (× crisis), U ← U − C, RD = min((age/L)^B, 1) per year → per step (× crisis), D = RD · NAV(1+G), NAV ← NAV(1+G) + C − D (test 13).
+
+**Stress** (`stress.py`): stylised shapes (see ASSUMPTIONS 27) and historical replay from user CSVs; both return single-path `MarketPaths`.
+
+## 3. Option pricing (Q) — `fosim/pricing/*`, tests `test_01_06_pricing.py`, `test_24_27_greeks_strikes.py`, `test_32_40_vol_surface.py`
+- BSM: C = S e^{−qT} N(d₁) − K e^{−rT} N(d₂), d₁ = [ln(S/K) + (r − q + σ²/2)T]/(σ√T), d₂ = d₁ − σ√T; limits T→0 (intrinsic), σ→0 (discounted forward intrinsic) (`black_scholes.bsm_price`, tests 1, 2, 5; MC test 6; parity test 3).
+- Greeks (`bsm_greeks`, test 4 FD, test 24 values): Δ = e^{−qT}N(d₁); Γ = e^{−qT}φ(d₁)/(Sσ√T); vega = S e^{−qT}φ(d₁)√T; θ = −S e^{−qT}φ(d₁)σ/(2√T) + qS e^{−qT}N(d₁) − rK e^{−rT}N(d₂); ρ = K T e^{−rT} N(d₂); ∂C/∂q = −S T e^{−qT} N(d₁); Ω = ΔS/C. Reporting conventions (`reporting_greeks`): dollar delta Δ n S; dollar gamma Γ n S² × 0.01; vega per point × 0.01; theta per year and /365; rho per bp × 1e-4 and per 100 bp × 0.01; ∂C/∂q per 100 bp.
+- Smile delta (`greeks.smile_delta`, test 30): Δ_smile = Δ + vega·(−ψ/S) under sticky moneyness; = Δ under sticky strike.
+- Implied vol (`implied_vol.implied_vol`, test 31): brentq on σ ∈ [1e-8, 10] after checking max(S e^{−qT} − K e^{−rT}, 0) ≤ C < S e^{−qT}.
+- Surface (`vol_surface.ParametricSurface`): IV_ATM(T,t) = θ_T (IV_s,t/θ_s)^{β(T)} (θ_T, β(T) linear in T); σ(K,T,t) = max(IV_ATM + ψ(T)·k, floor), ψ(T) = ψ_1y/√T, k = ln(K/F) with F = S e^{(r−q)T} (sticky moneyness) or k frozen at purchase (sticky strike).
+- Grid surface (`GridSurface`): w = σ²T linear in T, PCHIP across log-moneyness; calendar check w non-decreasing in T; butterfly check ∂²c/∂K² ≥ 0 on a fine grid of normalised call prices (test 32).
+- Price sources (`VolSource.vol`, test 40): scenario override → dealer quote at (tenor, strike) → surface file → parametric (level-calibrated by quotes); returns the label recorded per tranche. Bid/ask: σ ± ½ spread (new vs unwind), × stress multiplier when IV_s > threshold.
+- Strikes (`option_ladder.quote_new_tranche`, tests 26, 27): ATM spot K = S; ATM forward K = F; pct modes; delta target by vectorised bisection with σ(K) re-evaluated (scalar brentq version `solve_delta_target_strike`).
+
+## 4. Instruments — `fosim/instruments/*`, tests `test_18_20_35_loan_margin.py`, `test_23_ladder_schedule.py`
+- Loan rate: max(r_t, floor) + spread(tier) fixed at reset dates; interest L·rate·days/360 on the start-of-step balance, paid or capitalised (test 20); commitment fee on the undrawn limit (test 35); arrangement fee once; swap MTM L[(1 − DF(T)) − fixed Σ DF Δ].
+- Lending value LV = h(state)·(ℓ_E E + ℓ_I I + ℓ_cash max(cash,0)), h = min multiplier of breached stress rules; u = L/LV; d* = 1 − (L − ℓ_I I)/(ℓ_E E₀) (test 18); cure sale x = (L − u* LV)/((1 − s) − u* ℓ) (test 19); cash cure R = (L − u* LV)/(1 − u* ℓ_cash).
+- Ladder schedule (`LadderSchedule`, test 23): rolling ladder — slot j bought at months j + nH, sold at bid before each repurchase, expiry = purchase + 12 T₀; hold-to-expiry — repurchased at expiry; bullet — bought at 0, rolled every (T₀ − R) months.
+- Book marks (`mark_book`): per slot σ from the source at the current (or frozen) k, r = y_t(T_res) + funding spread, q = pricing curve at T_res; value at mid and bid; aggregated Greeks in reporting units.
+
+## 5. Strategies and engine — `fosim/strategies/*`, `fosim/engine/simulator.py`, tests `test_15_17_engine_identities.py`, `test_18_22_23_28_paths.py`, `test_36_40_policies.py`, `test_21_independent_recalc.py`
+Inception (`strategies/base.inception_balance`): pro rata → equities (NAV₀+L)w_eq, illiquids (NAV₀+L)w_ill; equity-only → equities NAV₀w_eq + L, illiquids NAV₀w_ill; B/C sleeve = NAV₀ − illiquids.
+
+Step order (`Simulator._step`, exactly §5.5): (3) interest on start-of-step cash/loan at the rate fixed at k, commitment fee; (4) dividends on start-of-step holdings with S_{k+1}; (5) illiquid official NAV update, calls out of cash, distributions into cash; (6) expiries: n·max(S − K, 0) to cash, slot cleared; (7) marks at k+1 (held, spot, options at mid/bid), futures VM, swap MTM, counterparty loss; (8) liquidity waterfall if cash < 0 (A/D: facility headroom then equity sales; C: equity sales; B: deployed spot, held, options at bid, futures); (9) margin (A/D): warning ≥ u_warn, call ≥ u_call → cash cure → investor sale (grace 0) or grace clock → bank liquidation at stressed slippage if ≥ u_closeout or grace expired; ruin check; (10) month-end: loan reset, strategy actions — B: ladder sales/purchases, exit rule, dry-powder tiers (drawdown/IV triggers, once per episode, deployable = cash − reserve, reserve = max(floor % NAV, projected calls × mult, N months spending)), exposure policy (bands, restrike, spot top-up, futures overlay), spending; A/D: optional rebalancing, spending; (11) record; (12) identity NAV_{k+1} − NAV_k = Σ components (equity_mtm, spot_mtm, option_mtm, illiquid_mtm, dividends, loan_interest, cash_interest, fees, transaction_costs, slippage, option_bid_ask, futures_pnl, swap_mtm, counterparty_loss, spending) within 1e-6 USD per 1bn NAV; `AccountingIdentityError` with full diagnostics (test 15).
+
+Sizing (`CallReplacementStrategy.total_target_notional`, test 28): notional match N = E_A; delta match N = E_A/Δ; beta-adjusted N = E_A β_held/Δ; delta fraction N = x E_A/Δ; premium budget N = x NAV/c; cash reserve N = max(sleeve − x NAV, 0)/c; per tranche N/M; targets scaled by NAV_t/NAV₀ under `pct_nav` / `target_pct_nav`.
+
+Independent recalculation (`validation/independent_recalc.py`, test 21): scalar re-implementation of A, B (bullet), C on the zero-vol scenario; agreement to < 1e-8 relative at every step.
+
+## 6. Analytics — `fosim/analytics/*`, tests `test_29_static_payoff_inception.py`, `test_analytics.py`
+- Inception (§6.2): balance sheets, sizing × strike table, put–call parity C = S e^{−qT} − K e^{−rT} + P, carry, d*.
+- Static payoff (§6.6): V_A = E₀(S_T/S₀)e^{qT} − L e^{r_L T}; V_B = N max(S_T/S₀ − K/S₀, 0) + (E₀ − L − Nc)e^{rT}; breakevens by grid sign changes + brentq (test 29).
+- Metrics (§6.1): terminal statistics with SE (mean σ/√n, quantiles bootstrap); per-path CAGR; step-return vol/Sharpe/Sortino in excess of the cash rate; max drawdown, time under water, time to recovery; VaR/CVaR (loss convention); margin/liquidity/ruin probabilities with binomial SE; dry-powder statistics; P(B > A); CRRA CE = (E[W^{1−γ}])^{1/(1−γ)}, γ = 1 → exp E[ln W]; FSD/SSD on pooled empirical CDFs.
+- Attribution (§6.3): component totals over steps 1..N reconcile to NAV_T − NAV₀ (step-0 entries are inception costs inside NAV₀); Greek explain Δ$·x + ½(Γ$/0.01)x² + vega₁pt Δσ + θ dt + ρ₁₀₀bp Δr/0.01 with explicit residual; ½Γ S²(σ_r² − σ_i²)dt diagnostic.
+- Exposure (§6.5): fans of dollar delta, % of A, effective leverage, utilisation, Greeks, beta-adjusted total exposure; delta/value grid (index × vol × rate shocks); participation profile and capture ratios; realised up/down betas.
+- Sensitivity (§6.4): tornado, heatmap, breakeven (brentq on B − A with CRN; CI = 1.96·SE/|slope|; reliability flag). Lenses (§5.7.9): equal capital, equal delta, equal vol / return via delta-fraction scaling.
+
+## 7. Reporting — `fosim/reporting/*`, tests `test_reporting.py`
+Excel single-path audit (ledger, balance sheet with identity residual column, tranches, events); IC HTML report; validation report (pytest junit → HTML with each test's docstring purpose).

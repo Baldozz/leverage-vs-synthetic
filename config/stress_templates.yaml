@@ -1,0 +1,75 @@
+# STYLISED stress templates — NOT historical data. Every parameter is editable in the UI.
+# Shapes are parametric approximations chosen to resemble the named episode's broad pattern;
+# they are not calibrated to, and must not be presented as, historical time series.
+templates:
+  GFC_like:
+    description: "Deep, prolonged drawdown with a slow U-shaped recovery, IV spike, rate cuts, LTV cuts, illiquid markdowns."
+    drawdown: -0.50
+    months_to_trough: 17
+    recovery_shape: U
+    months_to_recover: 36
+    iv_peak: 0.70
+    iv_decay_months: 6
+    rate_shock_bp: -300
+    ltv_multiplier: 0.80
+    illiquid_markdown: -0.25
+    illiquid_reporting_lag_months: 3
+    capital_call_multiplier: 1.5
+    dividend_cut: 0.20
+  COVID_like_V:
+    description: "Very fast crash with an equally fast V-shaped recovery and an extreme but short IV spike."
+    drawdown: -0.34
+    months_to_trough: 1
+    recovery_shape: V
+    months_to_recover: 5
+    iv_peak: 0.80
+    iv_decay_months: 2
+    rate_shock_bp: -150
+    ltv_multiplier: 0.90
+    illiquid_markdown: -0.10
+    illiquid_reporting_lag_months: 3
+    capital_call_multiplier: 1.2
+    dividend_cut: 0.10
+  DotCom_like_grind:
+    description: "Slow grind lower over 2.5 years, moderate IV, gradual rate cuts, long recovery."
+    drawdown: -0.49
+    months_to_trough: 30
+    recovery_shape: U
+    months_to_recover: 48
+    iv_peak: 0.40
+    iv_decay_months: 12
+    rate_shock_bp: -400
+    ltv_multiplier: 0.90
+    illiquid_markdown: -0.30
+    illiquid_reporting_lag_months: 6
+    capital_call_multiplier: 1.3
+    dividend_cut: 0.05
+  Rates_and_equity_2022_like:
+    description: "Equity drawdown with RISING rates (long calls lose on both rho and delta only partially offset), moderate IV."
+    drawdown: -0.25
+    months_to_trough: 9
+    recovery_shape: V
+    months_to_recover: 14
+    iv_peak: 0.35
+    iv_decay_months: 6
+    rate_shock_bp: +400
+    ltv_multiplier: 1.0
+    illiquid_markdown: -0.05
+    illiquid_reporting_lag_months: 3
+    capital_call_multiplier: 1.0
+    dividend_cut: 0.0
+  Lost_decade_L:
+    description: "L-shaped: drawdown then a decade without recovery; IV normalises; rates low."
+    drawdown: -0.40
+    months_to_trough: 24
+    recovery_shape: L
+    months_to_recover: 96
+    recovery_fraction: 0.3
+    iv_peak: 0.45
+    iv_decay_months: 12
+    rate_shock_bp: -250
+    ltv_multiplier: 0.85
+    illiquid_markdown: -0.20
+    illiquid_reporting_lag_months: 6
+    capital_call_multiplier: 1.2
+    dividend_cut: 0.10

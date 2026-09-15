@@ -1,0 +1,254 @@
+# ---------------------------------------------------------------------------------------------
+# DEFAULT CONFIGURATION — EVERY NUMBER IS A PLACEHOLDER.
+# Replace with current market data and the bank's actual Lombard term sheet before any decision.
+# All amounts USD; all rates decimal p.a.; tenors in years.
+# ---------------------------------------------------------------------------------------------
+
+run:
+  n_paths: 10000
+  horizon_years: 10
+  dt: monthly                 # monthly | weekly | daily
+  seed: 20260915
+  currency: USD               # fixed; any other value is rejected by the schema
+  label: "default: SPX bootstrap 1997-2026, options on SPXFP (PLACEHOLDER rates/vol/Lombard inputs)"
+
+portfolio:
+  nav0: 1_000_000_000
+  weights: {equities: 0.70, illiquids: 0.30}
+
+leverage:
+  ratio_of_nav: 0.25
+  allocation_of_borrowed_funds: pro_rata     # pro_rata | equity_only
+  day_count: ACT/360                         # ACT/360 | ACT/365
+  interest: pay_cash                         # pay_cash | capitalise
+  ltv_base: {equity_index: 0.50, illiquid: 0.00, cash: 0.90}      # PLACEHOLDER
+  ltv_stress_schedule:                       # h(state): multiplier applied when trigger breached
+    - {iv_short_above: 0.35, index_drawdown_below: null, multiplier: 0.80}
+  thresholds: {warn: 0.90, call: 1.00, closeout: 1.10, target_after_cure: 0.80}
+  cure_grace_days: 2
+  rebalancing: buy_and_hold                  # buy_and_hold | maintain_target_leverage
+  slippage_bps: 25                           # base slippage on forced sales
+  slippage_stress_multiplier: 4.0
+  strategy_d: {enabled: false, cash_buffer_pct_nav: 0.05}
+
+held_equity_portfolio:                       # A's plain-vanilla equity book = the SPX price index (+ cash dividends)
+  betas: {SPXFP: 0.0, SPX: 1.0}               # composition: Δln H = Σ β_i Δln S_i  (held book = SPX)
+  tracking_error_vol: 0.03                   # idiosyncratic vol of the actual book vs. SPX
+  expected_alpha: 0.0
+  beta_to_option_book: 0.988                # empirical monthly β of SPX to SPXFP 1997-2026 (exposure translation)
+
+equity_indices:
+  - name: SPXFP                              # option underlying: S&P 500 futures excess-return index (rolled futures, flat forward)
+    underlying_type: excess_return           # priced with q = r (Black-76); pays no dividends; expected_return is the EXCESS return
+    option_book_weight: 1.0
+    weight_in_equity_sleeve: 0.0
+    pricing_dividend_curve: {tenors: [1, 5], q: [0.0, 0.0]}       # ignored for excess_return (q = r)
+    dividend_stress_cut: 0.0
+    dividend_stress_trigger: -0.25
+    spot: 100.0
+    expected_return: 0.03                    # PLACEHOLDER excess return (P-measure) ≈ SPX total return − cash rate
+    return_type: arithmetic
+    dividend_yield: 0.0
+    realized_vol: 0.156                      # empirical: annualised monthly log-return vol of SPXFP 1997-2026
+    dividend_wht: 0.0
+    jump_mean: -0.15
+    jump_vol: 0.10
+  - name: SPX                                # plain-vanilla holding of A and C: S&P 500 price index, dividends paid in cash
+    underlying_type: price_return
+    option_book_weight: 0.0
+    weight_in_equity_sleeve: 1.0
+    pricing_dividend_curve: {tenors: [1, 5], q: [0.015, 0.015]}
+    dividend_stress_cut: 0.0
+    dividend_stress_trigger: -0.25
+    spot: 100.0
+    expected_return: 0.07                    # PLACEHOLDER total expected return (P-measure)
+    return_type: arithmetic
+    dividend_yield: 0.015                    # realised dividend yield paid in cash (PLACEHOLDER)
+    realized_vol: 0.154                      # empirical: annualised monthly log-return vol of SPX 1997-2026
+    dividend_wht: 0.15                       # PLACEHOLDER — confirm with tax advisor
+    jump_mean: -0.15
+    jump_vol: 0.10
+
+equity_model:
+  type: bootstrap                            # gbm | merton | coupled_stochvol | bootstrap (default: SPX history, jointly with SPXFP)
+  jump_lambda: 0.10                          # common jump clock intensity p.a.
+  jumps_enabled: true
+  vrp_ratio: 0.15                            # coupled_stochvol: sigma_real = IV_short * (1 - vrp)
+
+historical:                                  # equity_model.type: historical_replay (one deterministic path from `start`)
+  file: null
+  start: null
+  columns: {SPXFP: spxfp, SPX: spx_rebased}
+  held_column: spx_rebased
+
+custom_inception:                            # optional: enter each strategy's balance sheet directly (USD); overrides the 70/30 + leverage rule
+  enabled: false
+  illiquids: 375_000_000
+  A: {equities: 875_000_000, loan: 250_000_000, cash: 0}
+  B: {equities: 0, loan: 0, cash: 625_000_000}
+  C: {equities: 625_000_000, loan: 0, cash: 0}
+  reference_equity_exposure: null            # "A's equity exposure" used by B's sizing modes; null -> A.equities
+
+bootstrap:
+  file: data/SPX_SPXFP_aligned_monthly.csv   # user data: SPX price index and SPXFP (futures excess return) on aligned dates, 1997-09 to 2026-09
+  frequency: monthly
+  columns: {SPXFP: spxfp, SPX: spx_rebased}  # role -> column (jointly sampled rows); optional IV and RATES roles (e.g. IV: vix, RATES: sofr)
+  series_type: price                         # price | simple_return | log_return
+  expected_block_length: 12
+  recentre_means: true
+
+implied_vol:
+  short:
+    theta: 0.18
+    kappa: 4.0
+    eta: 1.0
+    rho_equity: -0.70
+    jump_add: 0.5
+    floor: 0.08
+    cap: 1.5
+    iv0: null                                # start value; null -> theta
+  term_structure: {tenors: [1, 2, 5], theta: [0.19, 0.20, 0.21], beta: [0.6, 0.45, 0.35]}
+  skew_1y: -0.10                             # psi_1y (vol per unit log-moneyness); psi(T)=psi_1y/sqrt(T)
+  skew_mode: sticky_moneyness                # sticky_moneyness | sticky_strike
+  vol_floor: 0.05
+  bid_ask_widening_per_iv: 0.0               # extra bid/ask vol pts per unit of IV_short above theta
+
+rates:
+  model: flat                                # flat | vasicek | curve
+  usd: {r0: 0.040, a: 0.3, b: 0.035, sigma: 0.01, rho_equity: 0.2, term_premium: 0.0}
+  flat_curve: null                           # optional deterministic term structure {tenors, zero}
+  curves_file: null                          # USD zero/par curve CSV (model: curve)
+  curve_type: zero                           # zero | par
+  scenario_shift: {type: none, bp: 0, buckets: null}   # none | parallel | steepener | flattener | buckets
+  cash: {instrument: tbills, spread: 0.0010, concentration_limit_pct: null}
+
+loan_terms:
+  base_index: SOFR
+  base_convention: overnight_compounded      # overnight_compounded | term
+  reset_months: 1
+  base_floor: 0.0
+  spread_tiers:                              # by utilisation of facility (loan / facility_limit)
+    - {utilisation_below: 1.0, spread: 0.0100}   # PLACEHOLDER
+  tier_basis: facility_utilisation           # facility_utilisation | loan_size
+  commitment_fee_bps: 0
+  arrangement_fee_bps: 0
+  facility_limit: 400_000_000
+  rate_type: floating                        # floating | fixed | floating_swapped
+  fixed_years: null
+  fixed_rate: null
+  renewal_years: null                        # facility maturity; null -> evergreen
+  renewal_spread_stress: 0.0050
+
+pricing:
+  source: parametric                         # dealer_quotes | vol_surface_file | parametric | scenario_overrides | historical_iv_file
+  dealer_quotes: []                          # see USER_GUIDE for the quote record format
+  vol_surface_file: null
+  historical_iv_file: null
+  scenario_overrides: []                     # e.g. {index: SPXFP, month_from: 6, month_to: 12, tenor: 5, iv: 0.35}
+  option_funding_spread: 0.0
+  bid_ask_vol_pts_new: 0.005
+  bid_ask_vol_pts_unwind: 0.0075
+  stress_bid_ask_multiplier: 3.0
+  stress_iv_short_above: 0.35
+  commission_bps_notional: 0
+  arbitrage_check: enforce                   # enforce | warn
+
+options:
+  tenor_years: 5
+  strike_mode: atm_spot                      # atm_spot | atm_forward | pct_spot | pct_forward | delta_target
+  strike_param: null                         # e.g. 1.10 for pct modes, 0.50 for delta_target
+  delta_definition: bsm                      # bsm | smile
+  option_type: vanilla                       # vanilla only in v1 (basket = v2)
+  exercise: european
+  sizing_mode: notional_match                # notional_match | delta_match | beta_adjusted_delta_match | premium_budget | cash_reserve_target | delta_fraction_of_A
+  sizing_param: null                         # X for premium_budget / cash_reserve_target / delta_fraction_of_A
+  sizing_basis: usd                          # usd | pct_nav  (target re-evaluated at each purchase if pct_nav)
+  ladder_mode: rolling_ladder                # bullet | monthly_buildup_hold_to_expiry | rolling_ladder
+  buildup_months: 12
+  hold_months_before_roll: 12
+  bullet_roll_residual_years: 1.0
+  buildup_holding: cash                      # cash | spot_selldown
+  resize_on_roll: target_pct_nav             # keep_notional | target_pct_nav | target_dollar_delta
+  iv_pause_threshold: null                   # pause new purchases when IV_ATM(5y) > threshold
+  extra_slots: 24                            # slots for rebalance / dry-powder / exit-rule tranches
+  counterparty: {enabled: false, default_intensity: 0.005, recovery: 0.4}
+
+exposure:
+  policy: static                             # static | rebalance_bands | restrike_on_move | spot_topup | futures_overlay
+  target: {type: pct_of_A_exposure, value: 1.0}
+  band_pp: 0.10
+  moneyness_band: [0.75, 1.40]
+  futures_overlay: {enabled: false, initial_margin_pct: 0.10}
+  comparison_lenses: [equal_capital, equal_delta, equal_vol]
+
+dry_powder:
+  enabled: true
+  tiers:
+    - {index_drawdown: -0.20, iv_short_above: null, deploy_pct_of_deployable: 0.33}
+    - {index_drawdown: -0.30, iv_short_above: null, deploy_pct_of_deployable: 0.50}
+    - {index_drawdown: -0.40, iv_short_above: null, deploy_pct_of_deployable: 1.00}
+  instrument: spot_index                     # spot_index | call_tranches
+  liquidity_reserve: {floor_pct_nav: 0.03, capital_call_months: 12, capital_call_stress_multiplier: 1.5}
+  exit_rule: {enabled: false, convert_over_months: 12}
+
+illiquids:
+  - name: HedgeFunds
+    weight: 0.33
+    type: open_ended
+    expected_return: 0.06
+    return_type: arithmetic
+    vol: 0.07
+    rho_equity: 0.6
+    jump_beta: 0.0
+    smoothing_phi: 0.2
+    reporting_months: 3
+    liquidity: {frequency_months: 3, notice_days: 90, gate: 0.25, lockup_months: 0}
+  - name: PrivateEquity
+    weight: 0.34
+    type: closed_end
+    expected_return: 0.10
+    return_type: arithmetic
+    vol: 0.22
+    rho_equity: 0.7
+    jump_beta: 0.5
+    smoothing_phi: 0.5
+    reporting_months: 3
+    unfunded_commitments: 100_000_000
+    ta_model: {rc: 0.25, b: 2.5, life_years: 10, age_years: 4, crisis: {drawdown_trigger: -0.25, contribution_multiplier: 1.5, distribution_multiplier: 0.5}}
+    new_commitment_pacing_pa: 0.0
+  - name: Infrastructure
+    weight: 0.33
+    type: closed_end
+    expected_return: 0.08
+    return_type: arithmetic
+    vol: 0.12
+    rho_equity: 0.5
+    jump_beta: 0.3
+    smoothing_phi: 0.5
+    reporting_months: 3
+    unfunded_commitments: 50_000_000
+    ta_model: {rc: 0.25, b: 2.0, life_years: 12, age_years: 5, crisis: {drawdown_trigger: -0.25, contribution_multiplier: 1.5, distribution_multiplier: 0.5}}
+    new_commitment_pacing_pa: 0.0
+
+illiquids_marking:
+  margin_uses: reported                      # reported | true   (lending value and official NAV)
+  risk_metrics_use: true_marks               # true_marks | reported
+
+correlation:                                 # Brownian drivers (parametric models); names must be exactly [indices..., illiquids..., IV, RATES]
+  names: [SPXFP, SPX, HedgeFunds, PrivateEquity, Infrastructure, IV, RATES]
+  matrix:
+    - [1.00, 0.98, 0.60, 0.70, 0.50, -0.70, 0.20]
+    - [0.98, 1.00, 0.60, 0.70, 0.50, -0.70, 0.20]
+    - [0.60, 0.60, 1.00, 0.50, 0.40, -0.40, 0.10]
+    - [0.70, 0.70, 0.50, 1.00, 0.45, -0.45, 0.10]
+    - [0.50, 0.50, 0.40, 0.45, 1.00, -0.35, 0.10]
+    - [-0.70, -0.70, -0.40, -0.45, -0.35, 1.00, -0.15]
+    - [0.20, 0.20, 0.10, 0.10, 0.10, -0.15, 1.00]
+
+costs: {equity_bps: 5, equity_bps_stressed: 40, stamp_duty_bps: 0}
+spending: {pct_nav_pa: 0.0, fixed_usd_pa: 0.0}
+
+analytics:
+  crra_gamma: 3.0
+  var_levels: [0.95, 0.99]
+  percentiles: [1, 5, 10, 25, 50, 75, 90, 95, 99]

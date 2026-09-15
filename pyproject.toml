@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fosim"
+version = "0.1.0"
+description = "Leverage vs. long-dated call replacement simulator (single-family office decision support, USD only)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy==2.5.3",
+    "scipy==1.18.1",
+    "pandas==2.3.3",
+    "pydantic==2.13.5",
+    "PyYAML>=6.0.2",
+    "plotly==5.24.1",
+    "streamlit==1.63.0",
+    "openpyxl>=3.1.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-html>=4.1",
+    "hypothesis>=6.110",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pandas-stubs",
+    "types-PyYAML",
+    "types-openpyxl",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: long-running Monte Carlo tests",
+]
+filterwarnings = ["error::RuntimeWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "validation", "app"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY", "RUF"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003", "RUF043"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/fosim", "validation"]
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["scipy.*", "plotly.*", "streamlit.*", "hypothesis.*", "openpyxl.*"]
+ignore_missing_imports = true
