@@ -1,7 +1,7 @@
 # USER_GUIDE.md
 
 ## What matters: the call-vs-cash backtest
-`.venv/bin/streamlit run app/historical_app.py --server.runOnSave true` → tab **Call vs cash backtest**.
+`.venv/bin/streamlit run app/historical_app.py --server.runOnSave true` — a single page, nothing else in it.
 
 Inputs: premium / investment (USD m), call tenor (years), first and last strike date (defaults 1997-09-09 → 2021-08-31), premium mode (*market*: implied vol and Treasury of the day for the tenor; *fixed*: one % of notional), cash leg (SPXFP, or SPX with dividends reinvested net of the withholding tax you enter).
 
@@ -9,8 +9,8 @@ Output: (1) P&L of the call (payoff − premium) and of the cash investment agai
 
 Caveats shown in the tab: strikes are daily so consecutive observations overlap almost entirely (a range of outcomes, not independent draws); no bid/ask, no early unwind; the 5-year vol is extrapolated from the 24-month Bloomberg series (VIX proxy before May 2005). For a 7- or 10-year tenor the tab warns when no `ust_7y`/`iv_7y` (`ust_10y`/`iv_10y`) columns exist and it falls back to the 5-year series.
 
-## Two apps
-* **Historical replay (simple)** — `.venv/bin/streamlit run app/historical_app.py`: pick capital, allocation, leverage, start date and Strategy B choices; leave the three historical inputs blank (Lombard cost, cash yield, LT option premium) or fill them; enter each strategy's starting balance sheet (equities / loan / cash, common illiquids) in the table, choose how B accumulates its option book (notional bought per week or month, target book, tenor), and press *Run historical replay* to see what A, B and C would have done through the actual S&P 500 history (weekly or monthly steps). No Monte Carlo.
+## Supporting apps (strategy simulator, kept for reference)
+* **Historical strategy replay** — `.venv/bin/streamlit run app/strategy_replay_app.py`: pick capital, allocation, leverage, start date and Strategy B choices; leave the three historical inputs blank (Lombard cost, cash yield, LT option premium) or fill them; enter each strategy's starting balance sheet (equities / loan / cash, common illiquids) in the table, choose how B accumulates its option book (notional bought per week or month, target book, tenor), and press *Run historical replay* to see what A, B and C would have done through the actual S&P 500 history (weekly or monthly steps). No Monte Carlo.
 * **Full simulator (9 tabs)** — `.venv/bin/streamlit run app/streamlit_app.py`: Monte Carlo, risk, sensitivity, stress, audit (SPEC §10).
 
 ## Install and run

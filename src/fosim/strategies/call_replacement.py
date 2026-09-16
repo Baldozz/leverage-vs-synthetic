@@ -329,7 +329,7 @@ class CallReplacementStrategy:
                 sim.buy_extra_tranche(ctx, k, low & (notional > 0), notional, quotes, origin=1, reason="rebalance_bands: buy tranche")
             if high.any():
                 opt_delta = st.dollar_delta if cfg.options.delta_definition == "bsm" else st.dollar_delta_smile
-                with np.errstate(divide="ignore", invalid="ignore"):
+                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):  # delta→0 gives inf, clipped to 1 (sell the whole book)
                     frac = np.where(high & (opt_delta > 0), np.clip((current - target) / np.maximum(opt_delta, 1e-300), 0.0, 1.0), 0.0)
                 sim.sell_option_fraction(ctx, k, frac, reason="rebalance_bands: sell tranches at bid")
         elif ex.policy == "restrike_on_move":

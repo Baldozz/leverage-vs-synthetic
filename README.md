@@ -1,6 +1,6 @@
 # Long-dated SPXFP call vs. cash investment — historical backtest (USD only)
 
-**Primary analysis** — `app/historical_app.py`, tab **Call vs cash backtest**: for every trading day since
+**Primary analysis** — `app/historical_app.py` (a single page): for every trading day since
 September 1997 an at-the-money call on **SPXFP** (S&P 500 futures excess-return index) maturing 5 years later
 is bought for a fixed USD amount (default 10 m; notional = premium ÷ premium-% of the day) and, alternatively,
 the same amount is invested in the index. Both are read at the option's maturity and plotted against the
@@ -12,7 +12,7 @@ Engine: `src/fosim/analytics/call_vs_cash.py`, tests `tests/test_call_vs_cash.py
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/streamlit run app/historical_app.py --server.runOnSave true   # → tab "Call vs cash backtest"
+.venv/bin/streamlit run app/historical_app.py --server.runOnSave true   # the backtest
 .venv/bin/python -m pytest                                              # full suite
 .venv/bin/ruff check . && .venv/bin/mypy                                # lint / strict typing
 ```
@@ -26,7 +26,7 @@ automatically and warns when it has to fall back to the 5-year columns.
 
 **Supporting material** (built first, kept for reference): the strategy simulator comparing a levered cash
 equity portfolio on a Lombard facility (A) with a laddered book of 5-year calls plus dry powder (B) and an
-unlevered benchmark (C) — historical replay in the first three tabs of `app/historical_app.py`, Monte Carlo in
+unlevered benchmark (C) — historical replay in `app/strategy_replay_app.py`, Monte Carlo in
 `app/streamlit_app.py` (spec `SPEC.md`, plan `docs/PLAN.md`, conventions `CLAUDE.md`, methodology
 `docs/METHODOLOGY.md`, assumptions `docs/ASSUMPTIONS.md`, limitations `docs/LIMITATIONS.md`, guide `docs/USER_GUIDE.md`).
 

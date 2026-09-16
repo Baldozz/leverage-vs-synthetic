@@ -27,12 +27,28 @@ def test_app_renders_all_tabs_and_runs() -> None:
 
 
 @pytest.mark.slow
-def test_historical_app_runs_1997_replay() -> None:
-    """The simple historical app renders, runs the 1997→2026 replay with default widgets and shows results."""
+def test_backtest_app_renders_without_tabs() -> None:
+    """The primary app (call-vs-cash backtest) is a single page: no tabs, chart + tables rendered at default widgets."""
     at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=300)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.tabs) == 0
+    assert len(at.dataframe) == 2  # summary table + return-distribution percentiles
+    assert not at.warning  # 5-year tenor: no fallback warning
+    at.number_input(key="bt_tenor").set_value(7.0).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("7-year" in w.value for w in at.warning)  # falls back to 5y columns until ust_7y/iv_7y exist
+    assert any("7-year ATM call" in m.value for m in at.markdown)
+
+
+@pytest.mark.slow
+def test_strategy_replay_app_runs_1997_replay() -> None:
+    """The supporting strategy-replay app renders its three tabs, runs the 1997→2026 replay with default widgets and shows results."""
+    at = AppTest.from_file(str(APP.parent / "strategy_replay_app.py"), default_timeout=300)
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     at.button[0].click().run()
     assert not at.exception, [e.value for e in at.exception]
+    assert len(at.tabs) == 3
     assert any("Done" in s.value for s in at.success)
     assert at.dataframe

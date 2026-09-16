@@ -208,7 +208,7 @@ def crra_certainty_equivalent(W: F64, gamma: float) -> dict[str, float]:
         u = Wp ** (1 - gamma) / (1 - gamma)
         ce = float(((1 - gamma) * u.mean()) ** (1 / (1 - gamma)))
     # delta-method SE on CE
-    se_u = float(u.std(ddof=1) / np.sqrt(Wp.size))
+    se_u = float(u.std(ddof=1) / np.sqrt(Wp.size)) if Wp.size > 1 else float("nan")  # SE undefined on a single path
     dce = ce if abs(gamma - 1.0) < 1e-12 else ce ** gamma
     return {"ce": ce, "ce_se": float(abs(dce) * se_u), "n_nonpositive": int(bad.sum()), "gamma": gamma, "ce_pct_nav0": float("nan")}
 

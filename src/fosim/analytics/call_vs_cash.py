@@ -44,7 +44,7 @@ class BacktestInfo:
 
 def tenor_columns(df: pd.DataFrame, tenor: float) -> tuple[str, str]:
     """(rate column, vol column) for the tenor: ``ust_{n}y`` / ``iv_{n}y`` when present, else the 5-year ones."""
-    n = int(round(tenor))
+    n = round(tenor)
     rate = f"ust_{n}y" if abs(tenor - n) < 1e-9 and f"ust_{n}y" in df.columns else "ust_5y"
     vol = f"iv_{n}y" if abs(tenor - n) < 1e-9 and f"iv_{n}y" in df.columns else "iv_5y"
     return rate, vol
@@ -82,7 +82,7 @@ def backtest(
     tr = total_return_index(d.spx_px_last.to_numpy(dtype=np.float64), d.spx_div_yld.to_numpy(dtype=np.float64), d.date.to_numpy(), wht)
     d = d.assign(prem=prem, cash_idx=d.spxfp.to_numpy() if cash_leg == "SPXFP" else tr)
     strikes = d[(d.date >= pd.Timestamp(start)) & (d.date <= pd.Timestamp(end))].copy()
-    strikes["maturity_target"] = strikes.date + pd.DateOffset(months=int(round(tenor * 12)))
+    strikes["maturity_target"] = strikes.date + pd.DateOffset(months=round(tenor * 12))
     strikes = strikes[strikes.maturity_target <= d.date.iloc[-1]]
     mat = pd.merge_asof(
         strikes.sort_values("maturity_target"),
