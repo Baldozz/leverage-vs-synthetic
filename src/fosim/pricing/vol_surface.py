@@ -317,12 +317,8 @@ class VolSource:
             for o in pricing.scenario_overrides:
                 if o.index is not None and o.index != index_name:
                     continue
-                if o.premium_pct is not None:
-                    # convert a premium in % of notional into the implied vol of a call struck at strike_pct_spot
-                    # (scale-free: uses S = 100; the inception rate/dividend of the option tenor are used for every tenor)
-                    T_o = o.tenor if o.tenor is not None else 5.0
-                    iv = implied_vol(o.premium_pct * 100.0, 100.0, 100.0 * o.strike_pct_spot, r0, q0, T_o, "call")
-                    o = o.model_copy(update={"iv": iv, "premium_pct": None})
+                # premium_pct overrides are kept as premiums and inverted at each purchase with the rate of the
+                # day (see ``premium_override``), so "fixed premium" means exactly that; iv overrides set the level
                 overrides.append(o)
         if pricing.dealer_quotes and pricing.source in ("dealer_quotes",):
             F0 = float(forward_price(S0, r0, q0, 1.0))  # placeholder, per-quote forward computed below
@@ -355,6 +351,18 @@ class VolSource:
         return VolSource(parametric=para, pricing=pricing, grid=grid, quotes=quotes, reconciliation=recon, overrides=overrides)
 
     # --- lookup ----------------------------------------------------------------------------
+    def premium_override(self, T: float, month: int) -> float | None:
+        """Premium (fraction of notional) fixed by a scenario override for a fresh tranche of tenor T at ``month``."""
+        for o in self.overrides:
+            if o.premium_pct is None:
+                continue
+            if month < o.month_from or (o.month_to is not None and month > o.month_to):
+                continue
+            if o.tenor is not None and abs(o.tenor - T) > self.tenor_tol:
+                continue
+            return float(o.premium_pct)
+        return None
+
     def _override(self, T: float, month: int) -> ScenarioOverride | None:
         for o in self.overrides:
             if o.iv is None:

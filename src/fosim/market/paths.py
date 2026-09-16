@@ -48,6 +48,9 @@ class MarketPaths:
     seed: int
     correlation_repaired: bool = False
     meta: dict[str, object] = field(default_factory=dict)
+    # optional observed series (P, N+1), decimals: "loan_base", "cash_yield", "option_rate", "div_yield" (continuous).
+    # When present the engine uses them instead of the single short rate / configured dividend yield.
+    series: dict[str, F64] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in ("S", "held", "iv_short", "r_short", "jump_counts", "log_jumps"):
@@ -96,5 +99,5 @@ class MarketPaths:
                 unfunded=il.unfunded[idx].copy(), true_return=il.true_return[idx].copy(), reported_return=il.reported_return[idx].copy(),
             ),
             rate_model=self.rate_model, book_weights=self.book_weights, seed=self.seed,
-            correlation_repaired=self.correlation_repaired, meta=dict(self.meta),
+            correlation_repaired=self.correlation_repaired, meta=dict(self.meta), series={k: v[idx].copy() for k, v in self.series.items()},
         )

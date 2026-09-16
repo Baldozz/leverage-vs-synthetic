@@ -36,6 +36,7 @@ from fosim.instruments.lombard_loan import (
     utilisation,
 )
 from fosim.instruments.option_ladder import MarketSnapshot, NewTrancheQuote, OptionBook, mark_book
+from fosim.market.equity import running_drawdown
 from fosim.market.generator import spawn_streams
 from fosim.market.paths import MarketPaths
 from fosim.pricing.black_scholes import bsm_price
@@ -80,9 +81,11 @@ class Simulator:
         self.ledger_paths = ledger_paths if ledger_paths is not None else [0]
         self.loan_terms = LoanTerms(cfg.loan_terms, cfg.leverage)
         self.book_dd = paths.book_drawdown()
+        ti = cfg.dry_powder.trigger_index or ("SPX" if "SPX" in cfg.index_names else None)
+        self.trigger_dd = running_drawdown(paths.S[:, :, cfg.index_names.index(ti)]) if ti is not None else self.book_dd
         self.held_dd = np.minimum(paths.held / np.maximum.accumulate(paths.held, axis=1) - 1.0, 0.0)
         # Q-measure inputs
-        r0_5y = float(paths.zero_rate(0, cfg.options.tenor_years)[0]) + cfg.pricing.option_funding_spread
+        r0_5y = float(self._zero_rate_fn(0)(cfg.options.tenor_years)[0]) + cfg.pricing.option_funding_spread
         self.vol_sources: list[VolSource] = [
             VolSource.build(
                 cfg.implied_vol, cfg.pricing, ic.name, ic.spot, r0_5y,
@@ -107,11 +110,26 @@ class Simulator:
             return lambda T: 0.0
         return lambda T: float(np.interp(T, tenors, qs))
 
+    def _zero_rate_fn(self, k: int) -> Callable[[float], F64]:
+        """Discount curve at step k: the observed option-rate series (flat across tenors) when supplied, else the rate model."""
+        opt = self.paths.series.get("option_rate")
+        if opt is not None:
+            return lambda tau: np.broadcast_to(opt[:, k], (self.P,)).astype(np.float64)
+        return lambda tau: self.paths.zero_rate(k, tau)
+
+    def loan_base(self, k: int) -> F64:
+        s = self.paths.series.get("loan_base")
+        return s[:, k] if s is not None else self.paths.r_short[:, k]
+
+    def cash_yield(self, k: int) -> F64:
+        s = self.paths.series.get("cash_yield")
+        return s[:, k] - self.cfg.rates.cash.spread if s is not None else self.paths.r_short[:, k] - self.cfg.rates.cash.spread
+
     def snapshot(self, k: int) -> MarketSnapshot:
         stressed = self.paths.iv_short[:, k] > self.cfg.pricing.stress_iv_short_above
         return MarketSnapshot(
             k=k, t=float(self.grid.t[k]), month=int(self.grid.month_index[k]), S=self.paths.S[:, k, :],
-            iv_short=self.paths.iv_short[:, k], zero_rate=lambda tau: self.paths.zero_rate(k, tau),
+            iv_short=self.paths.iv_short[:, k], zero_rate=self._zero_rate_fn(k),
             q_curve=self._q_fns, funding_spread=self.cfg.pricing.option_funding_spread, stressed=stressed, q_equals_r=self._q_equals_r,
         )
 
@@ -468,9 +486,9 @@ class Simulator:
             st.cash += draw
             ctx.ledger.post(0, "loan", draw, "inception: facility draw", draw > 0)
             ctx.ledger.post(0, "cash", draw, "inception: facility draw", draw > 0)
-        st.loan_rate = self.loan_terms.rate_at(self.paths.r_short[:, 0], st.loan, 0.0)
+        st.loan_rate = self.loan_terms.rate_at(self.loan_base(0), st.loan, 0.0)
         st.held_mv = st.held_units * self.paths.held[:, 0]
-        st.swap_mtm = self.loan_terms.swap_mtm(st.loan, lambda tau: self.paths.zero_rate(0, tau), 0.0)
+        st.swap_mtm = self.loan_terms.swap_mtm(st.loan, self._zero_rate_fn(0), 0.0)
         st.nav = st.total_nav()
         # t0 is treated as a month-end for strategy set-up (the ladder starts at month 0)
         ctx.strategy.each_step(self, ctx, 0)
@@ -519,8 +537,8 @@ class Simulator:
                 st.loan += st.accrued_interest
                 st.accrued_interest[:] = 0.0
         ctx.add_component(k1, "loan_interest", -loan_i)
-        cash_rate = self.paths.r_short[:, k] - self.cfg.rates.cash.spread
-        ci = cash_interest(st.cash, self.paths.r_short[:, k], self.cfg.rates.cash.spread, grid.days, self.cfg.leverage.day_count, st.loan_rate) * alive
+        cash_rate = self.cash_yield(k)
+        ci = cash_interest(st.cash, cash_rate + self.cfg.rates.cash.spread, self.cfg.rates.cash.spread, grid.days, self.cfg.leverage.day_count, st.loan_rate) * alive
         st.cash += ci
         ctx.add_component(k1, "cash_interest", ci)
         ctx.ledger.post(k1, "cash", ci, "cash interest")
@@ -574,7 +592,7 @@ class Simulator:
             ctx.events.futures_margin_calls[(st.cash < im) & alive] += 1
         # swap MTM
         if self.cfg.loan_terms.rate_type == "floating_swapped":
-            new_swap = self.loan_terms.swap_mtm(st.loan, lambda tau: self.paths.zero_rate(k1, tau), float(grid.t[k1]))
+            new_swap = self.loan_terms.swap_mtm(st.loan, self._zero_rate_fn(k1), float(grid.t[k1]))
             ctx.add_component(k1, "swap_mtm", new_swap - st.swap_mtm)
             st.swap_mtm = new_swap
         # counterparty default (options)
@@ -608,7 +626,7 @@ class Simulator:
         # 10. month-end actions
         if grid.is_month_end[k1]:
             if self.loan_terms.is_reset_step(int(grid.month_index[k1]), True):
-                st.loan_rate = self.loan_terms.rate_at(self.paths.r_short[:, k1], st.loan, float(grid.t[k1]))
+                st.loan_rate = self.loan_terms.rate_at(self.loan_base(k1), st.loan, float(grid.t[k1]))
             ctx.strategy.month_end(self, ctx, k1)
             if st.book is not None:
                 self.mark_options(ctx, k1)
@@ -654,9 +672,13 @@ class Simulator:
         cfg = self.cfg
         out = np.zeros(self.P)
         H = self.paths.held[:, k1]
+        dv = self.paths.series.get("div_yield")
         for i, p in enumerate(self.paths.index_params):
             w = cfg.equity_indices[i].weight_in_equity_sleeve
-            qc = p.cash_dividend_q_c * self._div_stress_mult(i, k1 - 1)
+            if w == 0.0:
+                continue
+            base_q = dv[:, k1 - 1] if (dv is not None and p.underlying_type == "price_return") else p.cash_dividend_q_c
+            qc = base_q * self._div_stress_mult(i, k1 - 1)
             out += np.asarray(dividend_cash(units * w, H, qc, self.grid.dt, p.wht))
         return out
 
@@ -783,8 +805,8 @@ class Simulator:
         r.record(
             k, nav=st.nav, nav_true=nav_true, nav_bid=st.nav - st.option_mv + st.option_mv_bid, cash=st.cash, loan=st.loan, accrued_interest=st.accrued_interest,
             held_mv=st.held_mv, spot_mv=st.spot_mv, option_mv=st.option_mv, illiquid_mv=st.illiquid_mv, illiquid_true=ill_true,
-            loan_rate=st.loan_rate, cash_rate=(cash_rate if cash_rate is not None else self.paths.r_short[:, k] - self.cfg.rates.cash.spread),
-            option_rate_5y=self.paths.zero_rate(k, self.cfg.options.tenor_years) + self.cfg.pricing.option_funding_spread,
+            loan_rate=st.loan_rate, cash_rate=(cash_rate if cash_rate is not None else self.cash_yield(k)),
+            option_rate_5y=self._zero_rate_fn(k)(self.cfg.options.tenor_years) + self.cfg.pricing.option_funding_spread,
             dollar_delta=st.dollar_delta, dollar_delta_smile=st.dollar_delta_smile, dollar_gamma=st.dollar_gamma, vega_1pt=st.vega_1pt,
             theta_year=st.theta_year, rho_100bp=st.rho_100bp, dq_100bp=st.dq_100bp,
             n_tranches=(st.book.active.sum(axis=1).astype(np.float64) if st.book is not None else np.zeros(self.P)),

@@ -214,6 +214,7 @@ class HistoricalReplayConfig(_Base):
     start: str | None = None  # YYYY-MM-DD; the window runs for run.horizon_years from here
     columns: dict[str, str] = {}  # role -> column: index names, optional "IV", "RATES"
     held_column: str | None = None  # optional column for the held portfolio level (else from betas)
+    iv_scale: Pos = 1.0  # multiplier applied to the IV column (anchors a long-dated vol series to today's quote)
 
 
 class BootstrapConfig(_Base):
@@ -417,6 +418,8 @@ class OptionsConfig(_Base):
     notional_per_purchase: Pos | None = None  # fixed_notional_schedule: USD notional of each purchase (or use notional_pct_nav)
     notional_pct_nav: Pos | None = None  # fixed_notional_schedule: each purchase = this fraction of current NAV (overrides the USD amount)
     target_total_notional: Pos | None = None  # fixed_notional_schedule: cap on the active book; None = keep adding without limit
+    target_basis: Literal["purchase_notional", "current_notional", "delta"] = "purchase_notional"  # what the target is measured in
+    target_pct_nav: Pos | None = None  # target = this fraction of B's current NAV (overrides target_total_notional)
     buildup_months: Annotated[int, Field(ge=1, le=120)] = 12
     hold_months_before_roll: Annotated[int, Field(ge=1, le=600)] = 12
     bullet_roll_residual_years: NonNeg = 1.0
@@ -503,6 +506,7 @@ class ExitRuleConfig(_Base):
 
 class DryPowderConfig(_Base):
     enabled: bool = True
+    trigger_index: str | None = None  # index whose drawdown fires the tiers; None → SPX if configured, else the option-book index
     tiers: list[DryPowderTier] = []
     instrument: Literal["spot_index", "call_tranches"] = "spot_index"
     liquidity_reserve: LiquidityReserveConfig = LiquidityReserveConfig()
@@ -721,6 +725,8 @@ class SimConfig(_Base):
         for o in self.pricing.scenario_overrides:
             if o.index is not None and o.index not in names:
                 raise ValueError(f"scenario override references unknown index {o.index!r}")
+        if self.dry_powder.trigger_index is not None and self.dry_powder.trigger_index not in names:
+            raise ValueError(f"dry_powder.trigger_index {self.dry_powder.trigger_index!r} is not a configured index")
         max_t = max(self.implied_vol.term_structure.tenors)
         if self.options.tenor_years > max_t + 1e-12:
             raise ValueError(

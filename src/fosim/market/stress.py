@@ -192,14 +192,28 @@ def build_historical_replay(
         x = df[col].to_numpy(dtype=np.float64)
         S[0, :, i] = c.spot * x / x[0]
     rate_model, r0 = build_rate_model(cfg.rates, base_dir)
-    if "RATES" in columns and columns["RATES"] in df.columns:
-        r_short = df[columns["RATES"]].to_numpy(dtype=np.float64)[None, :]
-    else:
-        r_short = np.full((1, N + 1), r0)
-    if "IV" in columns and columns["IV"] in df.columns:
-        iv_short = np.clip(df[columns["IV"]].to_numpy(dtype=np.float64), cfg.implied_vol.short.floor, cfg.implied_vol.short.cap)[None, :]
-    else:
-        iv_short = np.full((1, N + 1), cfg.implied_vol.short.theta)
+    def role_col(role: str) -> F64 | None:
+        """A role's column as decimals; values quoted in percent / vol points (|max| > 1.5) are divided by 100."""
+        name = columns.get(role)
+        if name is None or name not in df.columns:
+            return None
+        v = df[name].to_numpy(dtype=np.float64)
+        if np.isnan(v).any():
+            raise ValueError(f"column {name!r} ({role}) has gaps in the replay window starting {start}; forward-fill or shorten the window")
+        return v / 100.0 if np.nanmax(np.abs(v)) > 1.5 else v
+
+    r_col = role_col("RATES")
+    r_short = r_col[None, :] if r_col is not None else np.full((1, N + 1), r0)
+    iv_col = role_col("IV")
+    iv_short = np.clip(iv_col * cfg.historical.iv_scale, cfg.implied_vol.short.floor, cfg.implied_vol.short.cap)[None, :] if iv_col is not None else np.full((1, N + 1), cfg.implied_vol.short.theta)
+    series: dict[str, F64] = {}
+    for role, key in (("LOAN_BASE", "loan_base"), ("CASH_YIELD", "cash_yield"), ("OPTION_RATE", "option_rate")):
+        v = role_col(role)
+        if v is not None:
+            series[key] = v[None, :]
+    dv = role_col("DIV_YIELD")
+    if dv is not None:
+        series["div_yield"] = np.log1p(dv)[None, :]  # continuous yield from the annual yield
     bw = np.array([c.option_book_weight for c in cfg.equity_indices])
     if held_column is not None:
         hcol = df[held_column].to_numpy(dtype=np.float64)
@@ -221,6 +235,7 @@ def build_historical_replay(
         grid=grid, index_names=list(cfg.index_names), index_params=params, S=S, held=held, iv_short=iv_short,
         r_short=r_short, jump_counts=np.zeros((1, N)), log_jumps=np.zeros((1, N, n_idx)), illiquids=illiq,
         rate_model=rate_model, book_weights=bw, seed=cfg.run.seed,
-        meta={"model": "historical_replay", "file": str(p), "start": start, "end": str(df["date"].iloc[-1].date())},
+        meta={"model": "historical_replay", "file": str(p), "start": start, "end": str(df["date"].iloc[-1].date()), "series": sorted(series)},
+        series=series,
     )
     return StressResult(mp, {}, f"Historical replay from {start} ({p.name})")

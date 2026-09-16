@@ -283,8 +283,29 @@ def quote_new_tranche(
     else:
         raise ValueError(mode)
     k_ref = np.log(K / F)
-    # source lookup is scalar in k for dealer quotes: evaluate per unique k when all paths share it
+    prem_fixed = vs.premium_override(T0, snap.month)
+    if prem_fixed is not None:
+        # fixed premium in % of notional: back out the vol of each (K/S, r, q) combination at today's rate
+        from fosim.pricing.implied_vol import implied_vol
+
+        sig_paid = np.empty_like(S)
+        r_arr = np.broadcast_to(np.asarray(r, dtype=np.float64), S.shape)
+        q_arr = np.broadcast_to(np.asarray(q, dtype=np.float64), S.shape)
+        keys = np.round(np.stack([K / S, r_arr, q_arr], axis=1), 10)
+        for row in np.unique(keys, axis=0):
+            m = np.all(keys == row, axis=1)
+            sig_paid[m] = implied_vol(prem_fixed * 100.0, 100.0, 100.0 * row[0], row[1], row[2], T0, "call")
+        # the book is marked at the surface vol; the gap between the price paid and the mark is booked as a cost
+        sig, _ = vs.vol(k_ref, T0, snap.iv_short, snap.month)
+        g_mid = bsm_greeks(S, K, r, q, sig, T0, "call")
+        d_bsm = np.asarray(g_mid.delta, dtype=np.float64)
+        d_use = d_bsm + g_mid.vega * (-psi / S) if opt.delta_definition == "smile" else d_bsm
+        return NewTrancheQuote(
+            strike=K, sigma_mid=np.asarray(sig), sigma_ask=np.asarray(sig_paid), price_ask=np.asarray(prem_fixed * S), price_mid=np.asarray(g_mid.price),
+            delta=np.asarray(d_use), delta_bsm=d_bsm, k_ref=k_ref, source=SOURCE_CODES["scenario_override"], r=np.asarray(r), q=q, T=T0,
+        )
     if np.allclose(k_ref, k_ref[0]):
+        # source lookup is scalar in k for dealer quotes: evaluate per unique k when all paths share it
         sig, src = vs.vol(float(k_ref[0]), T0, snap.iv_short, snap.month)
     else:
         sig, src = vs.vol(k_ref, T0, snap.iv_short, snap.month)

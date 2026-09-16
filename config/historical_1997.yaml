@@ -77,10 +77,11 @@ equity_model:
   vrp_ratio: 0.15                            # coupled_stochvol: sigma_real = IV_short * (1 - vrp)
 
 historical:
-  file: data/SPX_SPXFP_aligned_monthly.csv
+  file: data/market_data_monthly.csv         # SPX, SPXFP and the Bloomberg series (rates, vols, dividend yield) on aligned dates
   start: "1997-09-30"
-  columns: {SPXFP: spxfp, SPX: spx_rebased}
+  columns: {SPXFP: spxfp, SPX: spx_rebased, LOAN_BASE: loan_base, CASH_YIELD: tbill_3m, OPTION_RATE: ust_5y, DIV_YIELD: spx_div_yld, IV: iv_5y}
   held_column: spx_rebased                   # A's held book = SPX exactly (no tracking error in the replay)
+  iv_scale: 1.0                              # set by the app so that the 5y vol on the last date reproduces today's premium quote
 
 # ---------------------------------------------------------------------------------------------
 # HISTORICAL INPUTS TO FILL (left as model placeholders; the UI's "Historical" tab has blank fields):
@@ -90,10 +91,10 @@ historical:
 # ---------------------------------------------------------------------------------------------
 custom_inception:                            # per-strategy balance sheets entered directly (the UI table writes here)
   enabled: false
-  illiquids: 375_000_000
-  A: {equities: 875_000_000, loan: 250_000_000, cash: 0}
-  B: {equities: 0, loan: 0, cash: 625_000_000}
-  C: {equities: 625_000_000, loan: 0, cash: 0}
+  illiquids: 250_000_000
+  A: {equities: 1_000_000_000, loan: 250_000_000, cash: 0}
+  B: {equities: 0, loan: 0, cash: 750_000_000}
+  C: {equities: 750_000_000, loan: 0, cash: 0}
   reference_equity_exposure: null
 
 bootstrap:
@@ -122,12 +123,12 @@ implied_vol:
 
 rates:
   model: flat                                # flat | vasicek | curve
-  usd: {r0: 0.040, a: 0.3, b: 0.035, sigma: 0.01, rho_equity: 0.2, term_premium: 0.0}
+  usd: {r0: 0.035, a: 0.3, b: 0.035, sigma: 0.01, rho_equity: 0.2, term_premium: 0.0}
   flat_curve: null                           # optional deterministic term structure {tenors, zero}
   curves_file: null                          # USD zero/par curve CSV (model: curve)
   curve_type: zero                           # zero | par
   scenario_shift: {type: none, bp: 0, buckets: null}   # none | parallel | steepener | flattener | buckets
-  cash: {instrument: tbills, spread: 0.0010, concentration_limit_pct: null}
+  cash: {instrument: tbills, spread: 0.0, concentration_limit_pct: null}   # cash yield = r0 = 3.5 %
 
 loan_terms:
   base_index: SOFR
@@ -135,14 +136,14 @@ loan_terms:
   reset_months: 1
   base_floor: 0.0
   spread_tiers:                              # by utilisation of facility (loan / facility_limit)
-    - {utilisation_below: 1.0, spread: 0.0100}   # PLACEHOLDER
+    - {utilisation_below: 1.0, spread: 0.0}      # all-in cost is the fixed rate below
   tier_basis: facility_utilisation           # facility_utilisation | loan_size
   commitment_fee_bps: 0
   arrangement_fee_bps: 0
   facility_limit: 400_000_000
-  rate_type: floating                        # floating | fixed | floating_swapped
-  fixed_years: null
-  fixed_rate: null
+  rate_type: fixed                           # all-in Lombard cost held constant over the replay
+  fixed_years: 30
+  fixed_rate: 0.043
   renewal_years: null                        # facility maturity; null -> evergreen
   renewal_spread_stress: 0.0050
 
@@ -151,10 +152,10 @@ pricing:
   dealer_quotes: []                          # see USER_GUIDE for the quote record format
   vol_surface_file: null
   historical_iv_file: null
-  scenario_overrides: []                     # e.g. {index: SPXFP, month_from: 6, month_to: 12, tenor: 5, iv: 0.35}
+  scenario_overrides: [{index: SPXFP, month_from: 0, tenor: 5, premium_pct: 0.15}]   # 5y ATM call premium = 15 % of notional
   option_funding_spread: 0.0
-  bid_ask_vol_pts_new: 0.005
-  bid_ask_vol_pts_unwind: 0.0075
+  bid_ask_vol_pts_new: 0.0                   # premium input is all-in
+  bid_ask_vol_pts_unwind: 0.0
   stress_bid_ask_multiplier: 3.0
   stress_iv_short_above: 0.35
   commission_bps_notional: 0
@@ -190,6 +191,7 @@ exposure:
 
 dry_powder:
   enabled: true
+  trigger_index: SPX                         # drawdown tiers measured on the SPX price index
   tiers:
     - {index_drawdown: -0.20, iv_short_above: null, deploy_pct_of_deployable: 0.33}
     - {index_drawdown: -0.30, iv_short_above: null, deploy_pct_of_deployable: 0.50}

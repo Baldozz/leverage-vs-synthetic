@@ -84,10 +84,10 @@ historical:                                  # equity_model.type: historical_rep
 
 custom_inception:                            # optional: enter each strategy's balance sheet directly (USD); overrides the 70/30 + leverage rule
   enabled: false
-  illiquids: 375_000_000
-  A: {equities: 875_000_000, loan: 250_000_000, cash: 0}
-  B: {equities: 0, loan: 0, cash: 625_000_000}
-  C: {equities: 625_000_000, loan: 0, cash: 0}
+  illiquids: 250_000_000
+  A: {equities: 1_000_000_000, loan: 250_000_000, cash: 0}
+  B: {equities: 0, loan: 0, cash: 750_000_000}
+  C: {equities: 750_000_000, loan: 0, cash: 0}
   reference_equity_exposure: null            # "A's equity exposure" used by B's sizing modes; null -> A.equities
 
 bootstrap:
@@ -184,6 +184,7 @@ exposure:
 
 dry_powder:
   enabled: true
+  trigger_index: SPX                         # drawdown tiers measured on the SPX price index
   tiers:
     - {index_drawdown: -0.20, iv_short_above: null, deploy_pct_of_deployable: 0.33}
     - {index_drawdown: -0.30, iv_short_above: null, deploy_pct_of_deployable: 0.50}

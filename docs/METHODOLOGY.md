@@ -71,3 +71,11 @@ Independent recalculation (`validation/independent_recalc.py`, test 21): scalar 
 
 ## 7. Reporting — `fosim/reporting/*`, tests `test_reporting.py`
 Excel single-path audit (ledger, balance sheet with identity residual column, tranches, events); IC HTML report; validation report (pytest junit → HTML with each test's docstring purpose).
+
+## 8. Call-vs-cash backtest — `fosim/analytics/call_vs_cash.py`, test `test_call_vs_cash.py`
+Daily data `data/market_data_daily.csv`. For every trading day t₀ in [start, end] with maturity T = trading day nearest to the calendar date t₀ + 12·tenor months (≤ last date):
+- premium fraction c(t₀) = BSM_call(S = K = 100, r = q = y_n(t₀), σ = IV_n(t₀), τ = tenor) / 100, where y_n and IV_n are the `ust_{n}y` / `iv_{n}y` columns of the tenor when present, else the 5-year columns (reported via `BacktestInfo.fallback`); q = r because SPXFP is an excess-return index (forward = spot); or c fixed by the user;
+- notional N = P / c(t₀) for the USD premium P; call P&L = N · max(SPXFP_T / SPXFP_{t₀} − 1, 0) − P (floored at −P by construction);
+- cash P&L = P · (I_T / I_{t₀} − 1), I = SPXFP, or I = SPX_px · exp(Σ ln(1 + d_i/100)·(1 − WHT)·Δt_i) with d = trailing 12-month S&P dividend yield (percent) and Δt in ACT/365 years — dividends reinvested continuously net of withholding;
+- returns on the USD committed = P&L / P; annualised mean = (1 + mean)^{1/tenor} − 1.
+No bid/ask, no early unwind, no discounting of the premium to maturity (both legs commit the same USD at t₀ and are read at T).

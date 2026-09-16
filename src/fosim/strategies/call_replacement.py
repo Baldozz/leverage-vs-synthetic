@@ -72,16 +72,42 @@ class CallReplacementStrategy:
         if opt.ladder_mode == "fixed_notional_schedule" and opt.purchase_frequency == "weekly":
             self._scheduled_purchase(sim, ctx, k)
 
+    def _mark_if_stale(self, sim: Simulator, ctx: StrategyContext, k: int) -> None:
+        """Per-slot BSM deltas of the current book (for the delta target basis) and the delta of a fresh tranche."""
+        from fosim.instruments.option_ladder import _slot_inputs, slot_vols
+        from fosim.pricing.black_scholes import bsm_greeks
+
+        st = ctx.state
+        assert st.book is not None
+        snap = sim.snapshot(k)
+        S, K, r, q, T = _slot_inputs(st.book, snap, sim.grid.steps_per_year)
+        sig, _ = slot_vols(st.book, sim.vol_sources, snap, S, K, r, q, T, sim.cfg.implied_vol.skew_mode)
+        self._slot_delta = np.asarray(bsm_greeks(S, K, r, q, sig, T, "call").delta, dtype=np.float64)
+        q0 = quote_new_tranche(sim.cfg.options, sim.vol_sources[0], snap, 0)
+        self._delta_new = float(np.mean(q0.delta))
+
     def _scheduled_purchase(self, sim: Simulator, ctx: StrategyContext, k: int) -> None:
         """Buy ``notional_per_purchase`` of fresh calls (per the strike mode) while the active book is below target."""
         opt = sim.cfg.options
         st = ctx.state
         assert st.book is not None
         per = opt.notional_pct_nav * st.nav if opt.notional_pct_nav is not None else np.full(st.P, float(opt.notional_per_purchase or 0.0))
-        if opt.target_total_notional is not None:
+        target = opt.target_pct_nav * st.nav if opt.target_pct_nav is not None else (np.full(st.P, float(opt.target_total_notional)) if opt.target_total_notional is not None else None)
+        if target is not None:
             # only the scheduled tranches (origin 0) count toward the target; dry-powder / rebalance tranches sit on top
-            active = (st.book.notional * st.book.active * (st.book.origin == 0)).sum(axis=1)
-            notional = np.minimum(np.maximum(opt.target_total_notional - active, 0.0), per)
+            sched = st.book.active & (st.book.origin == 0)
+            if opt.target_basis == "purchase_notional":
+                active = (st.book.notional * sched).sum(axis=1)
+            elif opt.target_basis == "current_notional":  # units × today's index level
+                S_now = np.take_along_axis(sim.paths.S[:, k, :], st.book.index_id, axis=1)
+                active = (st.book.units * S_now * sched).sum(axis=1)
+            else:  # delta: the book's equity exposure (dollar delta of the scheduled tranches)
+                self._mark_if_stale(sim, ctx, k)
+                S_now = np.take_along_axis(sim.paths.S[:, k, :], st.book.index_id, axis=1)
+                active = (st.book.units * S_now * self._slot_delta * sched).sum(axis=1)
+            room = np.maximum(target - active, 0.0)
+            # a purchase adds exposure ≈ per × Δ_new under the delta basis, so scale the room accordingly
+            notional = np.minimum(room if opt.target_basis != "delta" else room / max(float(self._delta_new), 1e-6), per)
         else:
             notional = per  # no cap: keep adding every purchase step
         want = (notional > 1.0) & st.alive
@@ -208,7 +234,7 @@ class CallReplacementStrategy:
         st = ctx.state
         if not cfg.exit_rule.enabled:
             return
-        dd = sim.book_dd[:, k]
+        dd = sim.trigger_dd[:, k]
         deployed = st.spot_units.sum(axis=1) > 0
         start = deployed & (dd >= -1e-12) & (st.exit_months_left == 0)
         if start.any():
@@ -231,7 +257,7 @@ class CallReplacementStrategy:
         st = ctx.state
         if not cfg.enabled or not cfg.tiers:
             return
-        dd = sim.book_dd[:, k]
+        dd = sim.trigger_dd[:, k]
         iv = sim.paths.iv_short[:, k]
         # re-arm all tiers after a new peak
         st.dp_tier_fired[dd >= -1e-12, :] = False
