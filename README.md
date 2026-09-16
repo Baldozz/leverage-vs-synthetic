@@ -20,9 +20,10 @@ python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 **Data** (`data/market_data_{daily,weekly,monthly}.csv`, built from the Bloomberg export `BBG_Other Data.xlsx`
 aligned to the SPX/SPXFP history): SPX, SPXFP, 3m LIBOR / Term SOFR, 3m T-bill, Fed funds, 5y Treasury,
 VIX / VIX3M / VIX6M / VIX1Y, SPX ATM implied vol 12/18/24m (from May 2005), trailing S&P dividend yield;
-derived `iv_5y` (extrapolated), `loan_base` (LIBOR→SOFR splice). To run the backtest at 7 or 10 years with
-tenor-consistent inputs, add columns `ust_7y` / `iv_7y` and `ust_10y` / `iv_10y` — the tab picks them up
-automatically and warns when it has to fall back to the 5-year columns.
+derived `iv_5y` (extrapolated), `loan_base` (LIBOR→SOFR splice); 10y Treasury (`USGG10YR`, from `10yr for calls analysis.xlsx`),
+7y Treasury (interpolated 5y/10y until a `USGG7YR` export is supplied, flag `ust_7y_interpolated`) and extrapolated `iv_7y` / `iv_10y`,
+all added by `scripts/build_long_tenor_columns.py` (Assumptions 19n). The page uses the tenor's own columns and warns when it has to
+fall back to the 5-year ones (e.g. a 3-year tenor).
 
 **Supporting material** (built first, kept for reference): the strategy simulator comparing a levered cash
 equity portfolio on a Lombard facility (A) with a laddered book of 5-year calls plus dry powder (B) and an

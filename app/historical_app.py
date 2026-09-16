@@ -30,29 +30,51 @@ st.set_page_config(page_title="SPXFP long-dated call vs. cash investment — bac
 
 
 @st.cache_data
+def strike_range(tenor: float) -> tuple[pd.Timestamp, pd.Timestamp]:
+    return cvc.strike_date_range(tenor)
+
+
+@st.cache_data
 def call_vs_cash_backtest(tenor: float, premium_usd: float, start: str, end: str, prem_fixed: float | None, cash_leg: str, wht: float) -> tuple[pd.DataFrame, cvc.BacktestInfo]:
     return cvc.backtest(tenor, premium_usd, start, end, prem_fixed, cash_leg, wht)
+
+
+def table_height(n_rows: int) -> int:
+    """Pixel height that shows every row of st.dataframe without an inner scrollbar (35 px per row + header + border)."""
+    return 35 * (n_rows + 1) + 3
 
 
 st.title("Long-dated ATM call on SPXFP vs. cash investment — historical backtest")
 st.subheader("Backtested P&L of a long-dated ATM call on SPXFP vs. a cash investment in the index")
 st.caption("Every trading day is a hypothetical strike date: buy an ATM call on SPXFP for the premium below (notional = premium ÷ premium-% of the day) "
            "or invest the same amount in the index; both are read at the option's maturity. Plotted against the maturity date. "
-           "Same construction as the J.P. Morgan / Bloomberg chart (their strikes: May-2006 → Aug-2021) with our own data: the premium is the one implied by the vol series and the 5-year Treasury of the day, not a dealer quote.")
+           "Same construction as the J.P. Morgan / Bloomberg chart (their 5-year chart: strikes May-2006 → Aug-2021) with our own data: the premium is the one implied by the vol series and the Treasury yield of the day for the chosen tenor, not a dealer quote.")
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     bt_prem_usd = st.number_input("Premium / investment (USD m)", 1.0, 1000.0, 10.0, 1.0, key="bt_prem_usd") * M
-    bt_tenor = st.number_input("Call tenor (years)", 1.0, 10.0, 5.0, 1.0, key="bt_tenor")
+    bt_tenor = float(st.selectbox("Call tenor (years)", [5, 7, 10], key="bt_tenor", help="Tenors with their own Treasury and implied-vol columns in the data (Assumptions 19l/19n)."))
 with c2:
-    bt_start = st.date_input("First strike date", pd.Timestamp("1997-09-09"), min_value=pd.Timestamp("1997-09-09"), max_value=pd.Timestamp("2025-12-31"), key="bt_start")
-    bt_end = st.date_input("Last strike date", pd.Timestamp("2021-08-31"), min_value=pd.Timestamp("1997-09-09"), max_value=pd.Timestamp("2025-12-31"), key="bt_end")
+    first_strike, last_strike = strike_range(bt_tenor)
+    # the usable window shrinks as the tenor grows: follow it unless the user has moved the field themselves
+    lo, hi = first_strike.date(), last_strike.date()
+    if st.session_state.get("bt_end") in (None, st.session_state.get("bt_end_auto")):
+        st.session_state["bt_end"] = st.session_state["bt_end_auto"] = hi
+    else:
+        st.session_state["bt_end"] = min(st.session_state["bt_end"], hi)
+    if st.session_state.get("bt_start") is not None:
+        st.session_state["bt_start"] = min(st.session_state["bt_start"], hi)
+    bt_start = st.date_input("First strike date", lo, min_value=lo, max_value=hi, key="bt_start")
+    bt_end = st.date_input("Last strike date", hi, min_value=lo, max_value=hi, key="bt_end")
 with c3:
-    bt_mode = st.radio("Premium paid", ["Market: vol and 5y rate of the day", "Fixed % of notional"], key="bt_mode")
+    # options carry the tenor, so no key: the selection is kept in session state across tenor changes
+    bt_mode = st.radio("Premium paid", [f"Market: {bt_tenor:g}y vol and {bt_tenor:g}y Treasury of the day", "Fixed % of notional"], index=1 if st.session_state.get("bt_mode_fixed") else 0)
+    st.session_state["bt_mode_fixed"] = not bt_mode.startswith("Market")
     bt_fixed = st.number_input("Fixed premium (% of notional)", 1.0, 60.0, 15.0, 0.5, key="bt_fixed", disabled=bt_mode.startswith("Market")) / 100.0
 with c4:
     bt_leg = st.radio("Cash investment in", ["SPXFP", "SPX with dividends reinvested"], key="bt_leg", help="The J.P. Morgan chart invests the cash leg in SPXFP itself.")
     bt_wht = st.number_input("Dividend withholding tax (%)", 0.0, 50.0, 15.0, 1.0, key="bt_wht") / 100.0
 bt, bt_info = call_vs_cash_backtest(float(bt_tenor), float(bt_prem_usd), str(bt_start), str(bt_end), None if bt_mode.startswith("Market") else float(bt_fixed), "SPXFP" if bt_leg == "SPXFP" else "SPX_TR", float(bt_wht))
+st.caption(f"The data run to {bt_info.last_date:%d %b %Y}, so at {bt_tenor:g} years the last strike date that still reaches maturity is **{last_strike:%d %b %Y}**: the strike window shrinks as the tenor grows.")
 if bt_mode.startswith("Market") and bt_info.fallback:
     st.warning(f"No {bt_tenor:g}-year Treasury / implied-vol series in the data: the premium is computed with the 5-year columns ({bt_info.rate_col}, {bt_info.vol_col}). "
                f"Add columns `ust_{round(bt_tenor)}y` and `iv_{round(bt_tenor)}y` to data/market_data_daily.csv for a tenor-consistent premium.")
@@ -73,7 +95,7 @@ else:
         "call": {"average P&L (m)": bt.call_pnl.mean() / M, "median P&L (m)": bt.call_pnl.median() / M, "best (m)": bt.call_pnl.max() / M, "worst (m)": bt.call_pnl.min() / M, "share of strike dates with a loss": float((bt.call_pnl < 0).mean())},
         "cash investment": {"average P&L (m)": bt.cash_pnl.mean() / M, "median P&L (m)": bt.cash_pnl.median() / M, "best (m)": bt.cash_pnl.max() / M, "worst (m)": bt.cash_pnl.min() / M, "share of strike dates with a loss": float((bt.cash_pnl < 0).mean())},
     })
-    st.dataframe(summ.style.format("{:,.1f}", subset=pd.IndexSlice[[i for i in summ.index if i.endswith("(m)")], :]).format("{:.0%}", subset=pd.IndexSlice[["share of strike dates with a loss"], :]), width="stretch")
+    st.dataframe(summ.style.format("{:,.1f}", subset=pd.IndexSlice[[i for i in summ.index if i.endswith("(m)")], :]).format("{:.0%}", subset=pd.IndexSlice[["share of strike dates with a loss"], :]), width="stretch", height=table_height(len(summ)))
     st.markdown(f"- {len(bt):,} strike dates from {bt.strike_date.min().date()} to {bt.strike_date.max().date()} (maturities {bt.index.min().date()} → {bt.index.max().date()}).\n"
                 f"- The call beats the cash investment on **{beats:.0%}** of strike dates and expires worthless (whole premium lost) on **{lost_all:.0%}**.\n"
                 f"- Premium paid: average **{bt.prem.mean():.1%}** of notional (min {bt.prem.min():.1%}, max {bt.prem.max():.1%}) → notional bought per {bt_prem_usd / M:,.0f} m of premium averages **{bt.notional.mean() / M:,.0f} m** ({bt.notional.min() / M:,.0f}–{bt.notional.max() / M:,.0f} m), i.e. the call's leverage on the same USD.")
@@ -93,7 +115,8 @@ else:
     dist = pd.DataFrame({c: {**{f"{int(q * 100)}th percentile": float(ret[c].quantile(q)) for q in qs}, "mean": float(ret[c].mean()), "std": float(ret[c].std()),
                              "probability of a loss": float((ret[c] < 0).mean()), "probability of losing everything": float((ret[c] <= -1 + 1e-9).mean()),
                              "mean annualised (CAGR)": float(np.sign(1 + ret[c].mean()) * abs(1 + ret[c].mean()) ** (1 / bt_tenor) - 1)} for c in ret.columns})
-    st.dataframe(dist.style.format("{:+.0%}", subset=pd.IndexSlice[[i for i in dist.index if "probability" not in i and i != "std"], :]).format("{:.0%}", subset=pd.IndexSlice[[i for i in dist.index if "probability" in i or i == "std"], :]), width="stretch")
+    st.dataframe(dist.style.format("{:+.0%}", subset=pd.IndexSlice[[i for i in dist.index if "probability" not in i and i != "std"], :]).format("{:.0%}", subset=pd.IndexSlice[[i for i in dist.index if "probability" in i or i == "std"], :]), width="stretch", height=table_height(len(dist)))
     st.caption("Returns are on the same USD committed (premium for the call, principal for the cash investment), held to the option's maturity; the call's return is floored at −100 %. "
                "Strike dates are daily, so consecutive observations overlap almost entirely: the distribution describes the range of outcomes, not independent draws.")
-    st.caption("For illustrative purposes only: hypothetical strike dates, cash-settled at maturity, no bid/ask, no early unwind. The 5-year implied vol before May-2005 is a VIX proxy and the 5-year vol is extrapolated from the 24-month series throughout (Assumptions 19l).")
+    st.caption(f"For illustrative purposes only: hypothetical strike dates, cash-settled at maturity, no bid/ask, no early unwind. The {bt_tenor:g}-year implied vol is extrapolated from the 24-month Bloomberg series throughout (VIX proxy before May-2005), Assumptions 19l/19n"
+               + ("; the 7-year Treasury is interpolated between the 5- and 10-year yields until a 7-year export is supplied." if bt_tenor == 7 else "."))

@@ -6,7 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fosim.analytics.call_vs_cash import backtest, tenor_columns, total_return_index
+from fosim.analytics.call_vs_cash import (
+    backtest,
+    strike_date_range,
+    tenor_columns,
+    total_return_index,
+)
 from fosim.pricing.black_scholes import bsm_price
 
 
@@ -87,8 +92,18 @@ def test_total_return_index_zero_yield_is_price() -> None:
 def test_real_data_smoke() -> None:
     bt, info = backtest(5.0, 10e6, "2006-05-01", "2021-08-31")
     assert len(bt) > 3500 and info.rate_col == "ust_5y" and not info.fallback  # 5y columns are the tenor's own
-    _, info7 = backtest(7.0, 10e6, "2010-01-01", "2010-03-31")
-    assert info7.fallback
+    for t in (7.0, 10.0):  # tenor-specific columns from scripts/build_long_tenor_columns.py
+        bt_t, info_t = backtest(t, 10e6, "2010-01-01", "2010-03-31")
+        assert (info_t.rate_col, info_t.vol_col) == (f"ust_{int(t)}y", f"iv_{int(t)}y") and not info_t.fallback
+        assert len(bt_t) > 50 and bt_t.call_pnl.min() >= -10e6
+    _, info3 = backtest(3.0, 10e6, "2010-01-01", "2010-03-31")
+    assert info3.fallback  # no 3y columns → 5y ones with a warning
+    for t in (5.0, 7.0, 10.0):  # the usable strike window shrinks as the tenor grows
+        first, last = strike_date_range(t)
+        full, _ = backtest(t, 10e6, str(first.date()), str(last.date()))
+        assert full.strike_date.max() == last and full.strike_date.min() == first
+        assert backtest(t, 10e6, str(last.date() + pd.Timedelta(1, unit="D")), "2026-12-31")[0].empty
+    assert strike_date_range(5.0)[1] > strike_date_range(7.0)[1] > strike_date_range(10.0)[1]
     assert bt.call_pnl.min() == pytest.approx(-10e6)  # 2007 vintages expire worthless
     assert 0.10 < bt.prem.mean() < 0.20
     with pytest.raises(ValueError):

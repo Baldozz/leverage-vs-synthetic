@@ -58,6 +58,19 @@ def total_return_index(price: np.ndarray, div_yield_pct: np.ndarray, dates: np.n
     return out
 
 
+def strike_date_range(tenor: float, file: Path | str | None = None) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """First and last trading day usable as a strike date at this tenor: the maturity must still fall inside the data."""
+    if tenor <= 0:
+        raise ValueError("tenor must be positive")
+    d = pd.read_csv(file or DAILY_FILE, parse_dates=["date"])
+    rate_col, vol_col = tenor_columns(d, tenor)
+    dates = d.dropna(subset=["spxfp", "spx_px_last", "spx_div_yld", rate_col, vol_col]).date.sort_values().reset_index(drop=True)
+    usable = dates[dates + pd.DateOffset(months=round(tenor * 12)) <= dates.iloc[-1]]
+    if usable.empty:
+        raise ValueError(f"no strike date reaches a {tenor:g}-year maturity inside the data (ends {dates.iloc[-1].date()})")
+    return dates.iloc[0], usable.iloc[-1]
+
+
 def backtest(
     tenor: float, premium_usd: float, start: str, end: str, prem_fixed: float | None = None,
     cash_leg: str = "SPXFP", wht: float = 0.15, file: Path | str | None = None,
