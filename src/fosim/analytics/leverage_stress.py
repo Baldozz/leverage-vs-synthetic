@@ -334,6 +334,8 @@ def rolling_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years:
             if e > last:
                 continue
         p, info = simulate(s, e, file=file, **kw)  # type: ignore[arg-type]
+        assert info.build_end is not None
+        lost = p.index[(p["call_notional"].to_numpy() == 0.0) & (p.index > info.build_end)]   # first day after the build with no call left
         t = int(p["drawdown"].to_numpy().argmin())
         m = int(p["headroom_A"].to_numpy().argmin())
         b = int(p["dry_powder_B"].to_numpy().argmin())
@@ -345,6 +347,8 @@ def rolling_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years:
             "A: LTV at trough": float(p["ltv_A"].iloc[t]), "interest paid A": float(p["interest_A"].sum()),
             "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
             "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
+            "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
+            "B: call notional end": float(p["call_notional"].iloc[-1]), "build end": info.build_end,
             "A return": float(p["nav_A"].iloc[-1] / p["nav_A"].iloc[0] - 1.0), "B return": float(p["nav_B"].iloc[-1] / p["nav_B"].iloc[0] - 1.0),
             "B: max LTV": float((p["loan_B"] / p["cap_B"]).max()),
             "premiums paid": float(sum(b.premium_paid for b in info.builds) + sum(r.premium_paid for r in info.rolls)), "payoffs received": float(sum(r.payoff for r in info.rolls)),

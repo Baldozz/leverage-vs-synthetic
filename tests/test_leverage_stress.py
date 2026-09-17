@@ -141,6 +141,15 @@ def test_rolling_start_row_equals_single_path(tmp_path: Path) -> None:
     assert seen and seen[-1] == (3, 3)
     rs2 = rolling_starts(starts, 5.0, build_tranches=1, file=f, until="2017-12-29")   # every start runs to the same end date
     assert len(rs2) == 3 and (rs2["end"] == rs2["end"].iloc[0]).all() and rs2["rolls"].tolist() == [1, 1, 0]
+    assert (rs2["build end"] == rs2.index).all()
+    pu, iu = simulate("2010-06-01", "2017-12-29", build_tranches=1, file=f)   # the first row against its own single path (its one call expired worthless on this random path)
+    lapsed = [r for r in iu.rolls if r.payoff == 0.0 and r.premium_paid == 0.0]
+    assert rs2["B: lapsed"].iloc[0] == len(lapsed) == 1 and rs2["B: calls lost on"].iloc[0] == lapsed[0].date and rs2["B: call notional end"].iloc[0] == 0.0 == pu["call_notional"].iloc[-1]
+    assert rs2["B: lapsed"].iloc[2] == 0 and pd.isna(rs2["B: calls lost on"].iloc[2]) and rs2["B: call notional end"].iloc[2] > 0   # the 2016 start: no expiry before the end, calls still held
+    fd = _file(tmp_path, 1000.0 * np.exp(-0.03 * np.arange(n) / 262), name="down.csv")   # falling path: the one call lapses → the option part is lost at its expiry
+    rs3 = rolling_starts(starts[:1], 5.0, build_tranches=1, file=fd, until="2017-12-29")
+    pd_, i_ = simulate("2010-06-01", "2017-12-29", build_tranches=1, file=fd)
+    assert rs3["B: lapsed"].iloc[0] == 1 and rs3["B: calls lost on"].iloc[0] == i_.rolls[0].date and rs3["B: call notional end"].iloc[0] == 0.0 and (pd_["call_notional"].loc[i_.rolls[0].date:] == 0).all()
     assert rs2["B: min dry powder"].iloc[0] <= rs2["B: dry powder at trough"].iloc[0]
 
 

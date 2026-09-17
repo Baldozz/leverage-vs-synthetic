@@ -53,6 +53,20 @@ def test_rotation_page_renders_one_start_date() -> None:
     assert "1 weekly step" in str(at.metric[4].delta) and at.metric[3].value == "250 m"
 
 
+def test_all_starts_page_weekly_grid() -> None:
+    """Page 2: every week from 1997 to the last start whose calls have expired, held to today — two charts, the percentile table, the reading."""
+    at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=600)
+    at.session_state["s_grid"] = "every week"
+    at.switch_page("views/all_starts.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.get("plotly_chart")) == 2 and len(at.dataframe) == 1   # annualised return by start date, its distribution; percentile table
+    dist = at.dataframe[0].value
+    assert list(dist.index)[:3] == ["5th percentile", "25th percentile", "50th percentile"] and (dist.iloc[:, 0] > 0).all() and (dist.iloc[:, 1] > 0).all()   # every start ends above where it began
+    assert any("Same start, same end" in m.value for m in at.markdown)
+    assert any("lost **all** its calls" in m.value for m in at.markdown) and any("Margin calls (Keep the loan): **0**" in m.value for m in at.markdown)
+
+
 def test_premium_history_page_unchanged() -> None:
     """Page 2 (call-vs-cash backtest): no tabs, chart + tables rendered at default widgets; its own tenor drives every label."""
     at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=300)

@@ -7,13 +7,16 @@ buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so t
 the money is replaced by a new ATM call on the same index units (paid from the payoff, then cash, then SPX); a call
 that expires worthless lapses. Historical data only, September 1997 to today.
 
-**The app** — `app/historical_app.py`, two pages, one sidebar (the setup above, every number editable):
+**The app** — `app/historical_app.py`, three pages, one sidebar (the setup above, every number editable):
 1. **Keep the loan or rotate** (`app/views/rotation.py`): both portfolios from one start date, held to today — the
    rotation (SPX sold, notional, premium, loan repaid, week by week), how the two evolve (NAV vs SPX, what each
    holds, room before a margin call vs capacity to borrow), the rolls by year. Engine
    `src/fosim/analytics/leverage_stress.py` (daily accounting identity asserted), tests `tests/test_leverage_stress.py`,
    formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p, limits `docs/LIMITATIONS.md` 17.
-2. **Call premium history** (`app/views/premium_history.py`, own inputs): for every trading day since
+2. **Any start date since 1997** (`app/views/all_starts.py`): the same from every trading day (or week) since 1997 to the
+   last start whose calls have expired, each held to today — annualised return by start date, and whether and when the
+   rotated portfolio lost its calls (`leverage_stress.rolling_starts`).
+3. **Call premium history** (`app/views/premium_history.py`, own inputs): for every trading day since
 September 1997 an at-the-money call on **SPXFP** (S&P 500 futures excess-return index) maturing 5 years later
 is bought for a fixed USD amount (default 10 m; notional = premium ÷ premium-% of the day) and, alternatively,
 the same amount is invested in the index. Both are read at the option's maturity and plotted against the

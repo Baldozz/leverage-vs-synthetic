@@ -54,6 +54,7 @@ def sidebar_setup() -> Setup:
             st.radio("A call that expires worthless is", ["not replaced", "replaced, SPX sold to pay it"], key="s_worthless", help="A call that expires in the money is always replaced by a new ATM call on the same index units, paid from the payoff, then cash, then by selling SPX.")
             st.radio("Payoff left after a roll", list(_SURPLUS), key="s_surplus", help="What happens to the part of a payoff not needed for the new call's premium.")
             st.number_input("Lending value of the calls (%)", 0.0, 100.0, 0.0, 5.0, key="s_lv_calls")
+            st.radio("Start dates (page 2)", ["every trading day", "every week"], key="s_grid", help="Every trading day takes a few minutes the first time, then it is cached.")
         st.caption("Historical data only, September 1997 to today.")
     return setup()
 
@@ -75,6 +76,25 @@ def simulate_cached(start: str, end: str, s: Setup) -> tuple[pd.DataFrame, lvs.S
     """Both portfolios from ``start`` to ``end`` on the sidebar setup."""
     return lvs.simulate(start, end, equity0=s.equity, loan0=s.loan, spread=s.spread, ltv_equity=s.lv_equity, ltv_call=s.lv_calls, tenor=s.tenor, wht=s.wht,
                         surplus=s.surplus, cash_buffer=0.0, delta=None, build_tranches=s.build, replace_worthless=s.replace_worthless)
+
+
+@st.cache_data(show_spinner=False)
+def all_starts_cached(first: str, last: str, freq: str, s: Setup, until: str) -> pd.DataFrame:
+    """The setup put on at every start of the grid ('D' every trading day, 'W-FRI' every week) and held to ``until``; a progress bar the first time."""
+    if freq == "D":
+        d = lvs._load(str(lvs.DAILY_FILE))
+        starts = pd.DatetimeIndex(d.date[(d.date >= pd.Timestamp(first)) & (d.date <= pd.Timestamp(last))])
+    else:
+        starts = pd.date_range(first, last, freq=freq)
+    bar = st.progress(0.0, text=f"Simulating {len(starts):,} start dates …")
+
+    def _p(i: int, n: int) -> None:
+        bar.progress(i / n, text=f"Simulating start {i:,} of {n:,} …")
+
+    out = lvs.rolling_starts(starts, s.tenor, until=until, progress=_p, equity0=s.equity, loan0=s.loan, spread=s.spread, ltv_equity=s.lv_equity, ltv_call=s.lv_calls, tenor=s.tenor, wht=s.wht,
+                             surplus=s.surplus, cash_buffer=0.0, delta=None, build_tranches=s.build, replace_worthless=s.replace_worthless)
+    bar.empty()
+    return out
 
 
 def table_height(n_rows: int) -> int:
