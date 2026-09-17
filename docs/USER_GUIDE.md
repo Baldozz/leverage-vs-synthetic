@@ -13,9 +13,9 @@ Pick a start date (any trading day from 9 Sep 1997); both portfolios are put on 
 
 ### Page 2 — Any start date since 1997
 The same two portfolios put on at every trading day (Advanced: every week, faster) from 9 Sep 1997 to the last start whose last weekly tranche still expires inside the data (for 5-year calls: start 22 Sep 2020, last strike 14 Sep 2021), each held to the last day of the data.
-1. **Annualised return to today, by start date**: the % change of each portfolio's NAV from the start to today, annualised over that start's own holding period; grey bands mark the start dates whose calls all expired worthless.
-2. **Distribution of the annualised return over all start dates**: overlaid histogram (0.5-point bins) and percentile table (5th…95th, mean, worst, best, and the difference in points); a computed line on the same-start comparison — share of starts where the rotation ends ahead, and the annualised difference (median, 5th–95th percentile, worst and best start).
-3. Three computed lines: share of starts that lost all / some calls, median and worst annualised return of each portfolio, margin calls and least room / least capacity.
+1. **Final value today, by start date**: each portfolio's NAV on the last day of the data (log scale; every start begins at the same 750 m, earlier starts have had longer to grow); grey bands mark the start dates whose calls all expired worthless.
+2. **Distribution of the final value over all start dates**: overlaid histogram (equal bins in log space) and percentile table (5th…95th, mean, worst, best, and the difference); a computed line on the same-start comparison — share of starts where the rotation ends ahead, and its final value relative to keeping the loan (median, 5th–95th percentile, worst and best start).
+3. Three computed lines: share of starts that lost all / some calls, median final value of each portfolio (and the annualised medians), margin calls and least room / least capacity.
 
 ### Page 3 — Call premium history
 The call-vs-cash backtest behind the premiums, with its own inputs. Inputs: premium / investment (USD m), call tenor (years), first and last strike date (defaults 1997-09-09 → 2021-08-31), premium mode (*market*: implied vol and Treasury of the day for the tenor; *fixed*: one % of notional), cash leg (SPXFP, or SPX with dividends reinvested net of the withholding tax you enter).

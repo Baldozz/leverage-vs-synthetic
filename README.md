@@ -14,7 +14,7 @@ that expires worthless lapses. Historical data only, September 1997 to today.
    `src/fosim/analytics/leverage_stress.py` (daily accounting identity asserted), tests `tests/test_leverage_stress.py`,
    formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p, limits `docs/LIMITATIONS.md` 17.
 2. **Any start date since 1997** (`app/views/all_starts.py`): the same from every trading day (or week) since 1997 to the
-   last start whose calls have expired, each held to today — annualised return by start date, and whether and when the
+   last start whose calls have expired, each held to today — final value by start date and its distribution, and whether the
    rotated portfolio lost its calls (`leverage_stress.rolling_starts`).
 3. **Call premium history** (`app/views/premium_history.py`, own inputs): for every trading day since
 September 1997 an at-the-money call on **SPXFP** (S&P 500 futures excess-return index) maturing 5 years later

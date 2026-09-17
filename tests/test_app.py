@@ -60,9 +60,9 @@ def test_all_starts_page_weekly_grid() -> None:
     at.switch_page("views/all_starts.py")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.get("plotly_chart")) == 2 and len(at.dataframe) == 1   # annualised return by start date, its distribution; percentile table
+    assert len(at.get("plotly_chart")) == 2 and len(at.dataframe) == 1   # final value by start date, its distribution; percentile table
     dist = at.dataframe[0].value
-    assert list(dist.index)[:3] == ["5th percentile", "25th percentile", "50th percentile"] and (dist.iloc[:, 0] > 0).all() and (dist.iloc[:, 1] > 0).all()   # every start ends above where it began
+    assert list(dist.index)[:3] == ["5th percentile", "25th percentile", "50th percentile"] and (dist.iloc[:, 0] > 750).all() and (dist.iloc[:, 1] > 750).all()   # every start ends above the 750 m it began with
     assert any("Same start, same end" in m.value for m in at.markdown)
     assert any("lost **all** its calls" in m.value for m in at.markdown) and any("Margin calls (Keep the loan): **0**" in m.value for m in at.markdown)
 
