@@ -24,7 +24,7 @@ columns (``ust_{n}y`` / ``iv_{n}y``, 5-year fallback reported).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -198,6 +198,7 @@ def simulate(
     E_B, call_val, call_notional, cash_B, loan_B_arr = (np.empty(n) for _ in range(5))
     eq_pnl_B, call_pnl_B, cash_int, interest_B, exposure_B = (np.zeros(n) for _ in range(5))
     is_roll = np.zeros(n, dtype=bool)
+    n_calls = np.zeros(n, dtype=np.int64)          # tranches alive at the end of each day
     rolls: list[Roll] = []
     builds: list[Roll] = []
     tot_sold = tot_notional = tot_premium = 0.0
@@ -235,6 +236,7 @@ def simulate(
 
     prem_today = build_step(0, n_tr)
     E_B[0], call_val[0], call_notional[0], cash_B[0], loan_B_arr[0] = eq_units * tr[0], prem_today, tot_notional, cash, loan_B
+    n_calls[0] = sum(len(ts) for ts in live.values())
     exposure_B[0] = E_B[0] + delta_notional
     for k in range(1, n):
         eq_pnl_B[k] = eq_units * (tr[k] - tr[k - 1])
@@ -282,6 +284,7 @@ def simulate(
         call_pnl_B[k] = marks[k] + payoff_today - call_val[k - 1]   # value of the surviving tranches + payoffs realised, vs yesterday's book
         E_B[k] = eq_units * tr[k]
         call_notional[k] = sum(t.units * t.strike for ts in live.values() for t in ts)
+        n_calls[k] = sum(len(ts) for ts in live.values())
         cash_B[k] = cash
         loan_B_arr[k] = loan_B
         exposure_B[k] = E_B[k] + delta_notional
@@ -304,7 +307,7 @@ def simulate(
         "spx_tr": tr, "spxfp": S, "drawdown": drawdown, "loan_rate": base + spread,
         "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
         "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr + cash_B, "nav_B": nav_B,
-        "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll,
+        "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
     }, index=pd.DatetimeIndex(d.date, name="date"))
     info = StressInfo(start=pd.Timestamp(dates[0]), end=pd.Timestamp(dates[-1]), premium0=tot_premium / tot_notional, rotation=tot_sold, delta0=tot_sold / tot_notional, notional0=tot_notional,
                       units0=sum(b.premium_paid / b.premium_frac for b in builds) / S[0], loan_base0=float(base[0]), rate_col=rate_col, vol_col=vol_col, tenor=float(tenor),
@@ -312,15 +315,14 @@ def simulate(
     return out, info
 
 
-def rolling_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years: float, file: Path | str | None = None, until: pd.Timestamp | str | None = None,
-                   progress: Callable[[int, int], None] | None = None, **kw: object) -> pd.DataFrame:
-    """The same setup put on at each start date and run for ``horizon_years`` (windows ending beyond the data are skipped), or, with
-    ``until``, from each start to that date (starts less than 30 days before it are skipped); one row per start."""
+def _iter_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years: float, file: Path | str | None, until: pd.Timestamp | str | None,
+                 progress: Callable[[int, int], None] | None, kw: dict[str, object]) -> Iterator[tuple[pd.DataFrame, StressInfo]]:
+    """One simulation per start date: run for ``horizon_years`` (windows ending beyond the data are skipped) or, with ``until``, from each
+    start to that date (starts whose build cannot be complete 30 days before it are skipped)."""
     full = _load(str(file or DAILY_FILE))
     last = full.date.iloc[-1]
     n_build = kw.get("build_tranches", 52)
     build_days = 7 * (int(n_build if isinstance(n_build, int | float) else 52) - 1)   # the build must be complete ≥ 30 days before the end
-    rows = []
     all_starts = pd.DatetimeIndex(starts)
     for i, s in enumerate(all_starts):
         if progress is not None and (i % 25 == 0 or i == len(all_starts) - 1):
@@ -333,27 +335,153 @@ def rolling_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years:
             e = s + pd.DateOffset(months=round(horizon_years * 12))
             if e > last:
                 continue
-        p, info = simulate(s, e, file=file, **kw)  # type: ignore[arg-type]
-        assert info.build_end is not None
-        lost = p.index[(p["call_notional"].to_numpy() == 0.0) & (p.index > info.build_end)]   # first day after the build with no call left
-        t = int(p["drawdown"].to_numpy().argmin())
-        m = int(p["headroom_A"].to_numpy().argmin())
-        b = int(p["dry_powder_B"].to_numpy().argmin())
-        rows.append({
-            "start": info.start, "premium0": info.premium0, "rotation": info.rotation, "notional0": info.notional0,
-            "A: max LTV": float(p["ltv_A"].max()), "A: min headroom": float(p["headroom_A"].iloc[m]), "A: min headroom date": p.index[m], "A: margin call": bool(p["headroom_A"].iloc[m] < 0.0),
-            "B: min dry powder": float(p["dry_powder_B"].iloc[b]), "B: min dry powder date": p.index[b],
-            "trough": p.index[t], "drawdown at trough": float(p["drawdown"].iloc[t]), "B: capacity at trough": float(p["cap_B"].iloc[t]), "B: dry powder at trough": float(p["dry_powder_B"].iloc[t]), "A: headroom at trough": float(p["headroom_A"].iloc[t]),
-            "A: LTV at trough": float(p["ltv_A"].iloc[t]), "interest paid A": float(p["interest_A"].sum()),
-            "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
-            "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
-            "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
-            "B: call notional end": float(p["call_notional"].iloc[-1]), "build end": info.build_end,
-            "A return": float(p["nav_A"].iloc[-1] / p["nav_A"].iloc[0] - 1.0), "B return": float(p["nav_B"].iloc[-1] / p["nav_B"].iloc[0] - 1.0),
-            "B: max LTV": float((p["loan_B"] / p["cap_B"]).max()),
-            "premiums paid": float(sum(b.premium_paid for b in info.builds) + sum(r.premium_paid for r in info.rolls)), "payoffs received": float(sum(r.payoff for r in info.rolls)),
-            "equity sold at rolls": float(sum(r.equity_sold for r in info.rolls)),
-            "end: equity A": float(p["E_A"].iloc[-1]), "end: loan A": float(p["loan"].iloc[-1]),
-            "end: equity B": float(p["E_B"].iloc[-1]), "end: calls B": float(p["call_val"].iloc[-1]), "end: cash B": float(p["cash_B"].iloc[-1]), "end: loan B": float(p["loan_B"].iloc[-1]),
-        })
+        yield simulate(s, e, file=file, **kw)  # type: ignore[arg-type]
+
+
+def _start_row(p: pd.DataFrame, info: StressInfo) -> dict[str, object]:
+    """The summary row of one start (see ``rolling_starts``)."""
+    assert info.build_end is not None
+    lost = p.index[(p["call_notional"].to_numpy() == 0.0) & (p.index > info.build_end)]   # first day after the build with no call left
+    t = int(p["drawdown"].to_numpy().argmin())
+    m = int(p["headroom_A"].to_numpy().argmin())
+    b = int(p["dry_powder_B"].to_numpy().argmin())
+    na = int(p["nav_A"].to_numpy().argmin())
+    nb = int(p["nav_B"].to_numpy().argmin())
+    return {
+        "A: min NAV": float(p["nav_A"].iloc[na]), "A: min NAV date": p.index[na], "A: LTV at min NAV": float(p["ltv_A"].iloc[na]),
+        "B: min NAV": float(p["nav_B"].iloc[nb]), "B: min NAV date": p.index[nb], "B: dry powder at min NAV": float(p["dry_powder_B"].iloc[nb]),
+        "start": info.start, "premium0": info.premium0, "rotation": info.rotation, "notional0": info.notional0,
+        "A: max LTV": float(p["ltv_A"].max()), "A: min headroom": float(p["headroom_A"].iloc[m]), "A: min headroom date": p.index[m], "A: margin call": bool(p["headroom_A"].iloc[m] < 0.0),
+        "B: min dry powder": float(p["dry_powder_B"].iloc[b]), "B: min dry powder date": p.index[b],
+        "trough": p.index[t], "drawdown at trough": float(p["drawdown"].iloc[t]), "B: capacity at trough": float(p["cap_B"].iloc[t]), "B: dry powder at trough": float(p["dry_powder_B"].iloc[t]), "A: headroom at trough": float(p["headroom_A"].iloc[t]),
+        "A: LTV at trough": float(p["ltv_A"].iloc[t]), "interest paid A": float(p["interest_A"].sum()),
+        "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
+        "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
+        "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
+        "B: call notional end": float(p["call_notional"].iloc[-1]), "build end": info.build_end,
+        "A return": float(p["nav_A"].iloc[-1] / p["nav_A"].iloc[0] - 1.0), "B return": float(p["nav_B"].iloc[-1] / p["nav_B"].iloc[0] - 1.0),
+        "B: max LTV": float((p["loan_B"] / p["cap_B"]).max()),
+        "premiums paid": float(sum(b.premium_paid for b in info.builds) + sum(r.premium_paid for r in info.rolls)), "payoffs received": float(sum(r.payoff for r in info.rolls)),
+        "equity sold at rolls": float(sum(r.equity_sold for r in info.rolls)),
+        "end: equity A": float(p["E_A"].iloc[-1]), "end: loan A": float(p["loan"].iloc[-1]), "A: headroom end": float(p["headroom_A"].iloc[-1]),
+        "end: equity B": float(p["E_B"].iloc[-1]), "end: calls B": float(p["call_val"].iloc[-1]), "end: cash B": float(p["cash_B"].iloc[-1]), "end: loan B": float(p["loan_B"].iloc[-1]), "B: dry powder end": float(p["dry_powder_B"].iloc[-1]),
+    }
+
+
+def corrections(threshold: float = 0.20, file: Path | str | None = None, wht: float = 0.15, on: str = "total_return") -> pd.DataFrame:
+    """The market corrections on the record: falls of at least ``threshold`` from the running peak of SPX with dividends net of withholding
+    (``on="total_return"``) or of the SPX price index (``on="price"``). One row per episode, index = label ("2000–2002"), columns peak,
+    trough, recovered (NaT if not yet), drawdown (negative), peak level, trough level (of the series used)."""
+    if not 0.0 < threshold < 1.0:
+        raise ValueError("threshold must be in (0, 1)")
+    if on not in ("total_return", "price"):
+        raise ValueError("on must be 'total_return' or 'price'")
+    d = _load(str(file or DAILY_FILE)).dropna(subset=["spx_px_last", "spx_div_yld"]).reset_index(drop=True)
+    px = d.spx_px_last.to_numpy(dtype=np.float64)
+    tr = total_return_index(px, d.spx_div_yld.to_numpy(dtype=np.float64), d.date.to_numpy(), wht) if on == "total_return" else px
+    dd = tr / np.maximum.accumulate(tr) - 1.0
+    dates = pd.DatetimeIndex(d.date)
+    rows = []
+    k, n = 0, len(dd)
+    while k < n:
+        if dd[k] < 0.0:
+            j = k
+            while j < n and dd[j] < 0.0:
+                j += 1
+            seg = dd[k:j]
+            if seg.min() <= -threshold:
+                t = k + int(seg.argmin())
+                rows.append({"peak": dates[k - 1], "trough": dates[t], "recovered": dates[j] if j < n else pd.NaT, "drawdown": float(seg.min()),
+                             "peak level": float(tr[k - 1]), "trough level": float(tr[t])})
+            k = j
+        else:
+            k += 1
+    out = pd.DataFrame(rows, columns=["peak", "trough", "recovered", "drawdown", "peak level", "trough level"])
+    labels = [f"{pd.Timestamp(pk).year}–{pd.Timestamp(tr_).year}" if pd.Timestamp(pk).year != pd.Timestamp(tr_).year else f"{pd.Timestamp(tr_).year}"
+              for pk, tr_ in zip(out["peak"], out["trough"], strict=True)]
+    out.index = pd.Index(labels, name="correction")
+    return out
+
+
+def rolling_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years: float, file: Path | str | None = None, until: pd.Timestamp | str | None = None,
+                   progress: Callable[[int, int], None] | None = None, **kw: object) -> pd.DataFrame:
+    """The same setup put on at each start date and run for ``horizon_years`` (windows ending beyond the data are skipped), or, with
+    ``until``, from each start to that date (starts less than 30 days before it are skipped); one row per start."""
+    rows = [_start_row(p, info) for p, info in _iter_starts(starts, horizon_years, file, until, progress, kw)]
     return pd.DataFrame(rows).set_index("start") if rows else pd.DataFrame()
+
+
+def rolling_paths(starts: list[pd.Timestamp] | pd.DatetimeIndex, until: pd.Timestamp | str, columns: tuple[str, ...] = ("headroom_A", "dry_powder_B"), sample: str = "M",
+                  mark_days: tuple[pd.Timestamp, ...] = (), file: Path | str | None = None, progress: Callable[[int, int], None] | None = None,
+                  **kw: object) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """``rolling_starts(until=…)`` plus, for each path column, a wide DataFrame (index = the calendar end of each ``sample`` period — a pandas
+    period alias, "M" month by default, "W" week — the last day, and every ``mark_days`` trading day inside the path, e.g. market bottoms;
+    columns = start dates; NaN before a start) holding the value on the last trading day of each period (the day itself for marks)."""
+    rows: list[dict[str, object]] = []
+    series: dict[str, dict[pd.Timestamp, pd.Series]] = {c: {} for c in columns}
+    marks = pd.DatetimeIndex(mark_days)
+    for p, info in _iter_starts(starts, 0.0, file, until, progress, kw):
+        rows.append(_start_row(p, info))
+        period_end = pd.DatetimeIndex(pd.DatetimeIndex(p.index).to_period(sample).to_timestamp(how="end").normalize())   # each trading day → the end of its period (month by default)
+        samp = p[list(columns)].groupby(period_end).last()
+        samp = samp[samp.index < p.index[-1]]
+        samp = pd.concat([samp, p.loc[p.index.isin(marks), list(columns)], p[list(columns)].iloc[[-1]]])
+        samp = samp[~samp.index.duplicated(keep="last")].sort_index()
+        for c in columns:
+            series[c][info.start] = samp[c]
+    if not rows:
+        return pd.DataFrame(), {c: pd.DataFrame() for c in columns}
+    return pd.DataFrame(rows).set_index("start"), {c: pd.DataFrame(series[c]).sort_index() for c in columns}
+
+
+def starts_table(rs: pd.DataFrame) -> pd.DataFrame:
+    """``rolling_starts`` rows as a readable table for export: USD in millions, one column per fact, dates as dates."""
+    m = 1e6
+    years = rs["years"]
+    out = pd.DataFrame({
+        "start": pd.DatetimeIndex(rs.index).date, "end": pd.DatetimeIndex(rs["end"]).date, "years held": years.round(2),
+        "NAV at start (m)": (rs["NAV A end"] / (1.0 + rs["A return"]) / m).round(1),
+        "keep the loan: NAV today (m)": (rs["NAV A end"] / m).round(1), "rotate into calls: NAV today (m)": (rs["NAV B end"] / m).round(1),
+        "keep the loan: total return": rs["A return"].round(4), "rotate into calls: total return": rs["B return"].round(4),
+        "keep the loan: annualised return": ((1.0 + rs["A return"]) ** (1.0 / years) - 1.0).round(4), "rotate into calls: annualised return": ((1.0 + rs["B return"]) ** (1.0 / years) - 1.0).round(4),
+        "rotation: SPX sold (m)": (rs["rotation"] / m).round(1), "rotation: call notional (m)": (rs["notional0"] / m).round(1), "rotation: premium (% of notional)": rs["premium0"].round(4),
+        "keep the loan: lowest NAV (m)": (rs["A: min NAV"] / m).round(1), "keep the loan: lowest NAV on": pd.DatetimeIndex(rs["A: min NAV date"]).date,
+        "rotate into calls: lowest NAV (m)": (rs["B: min NAV"] / m).round(1), "rotate into calls: lowest NAV on": pd.DatetimeIndex(rs["B: min NAV date"]).date,
+        "keep the loan: max LTV": rs["A: max LTV"].round(4), "keep the loan: margin call": rs["A: margin call"],
+        "keep the loan: lowest dry powder (m)": (rs["A: min headroom"] / m).round(1), "keep the loan: lowest dry powder on": pd.DatetimeIndex(rs["A: min headroom date"]).date,
+        "rotate into calls: lowest dry powder (m)": (rs["B: min dry powder"] / m).round(1), "rotate into calls: lowest dry powder on": pd.DatetimeIndex(rs["B: min dry powder date"]).date,
+        "keep the loan: dry powder today (m)": (rs["A: headroom end"] / m).round(1), "rotate into calls: dry powder today (m)": (rs["B: dry powder end"] / m).round(1),
+        "keep the loan: interest paid (m)": (rs["interest paid A"] / m).round(1), "rotate into calls: premiums paid (m)": (rs["premiums paid"] / m).round(1),
+        "rotate into calls: payoffs received (m)": (rs["payoffs received"] / m).round(1), "rotate into calls: SPX sold at rolls (m)": (rs["equity sold at rolls"] / m).round(1),
+        "calls expired": rs["rolls"], "calls expired worthless": rs["B: lapsed"], "all calls gone on": [d.isoformat() if pd.notna(d) else "" for d in pd.DatetimeIndex(rs["B: calls lost on"]).date],
+        "keep the loan today: SPX (m)": (rs["end: equity A"] / m).round(1), "keep the loan today: loan (m)": (rs["end: loan A"] / m).round(1),
+        "rotate into calls today: SPX (m)": (rs["end: equity B"] / m).round(1), "rotate into calls today: calls (m)": (rs["end: calls B"] / m).round(1),
+        "rotate into calls today: call notional (m)": (rs["B: call notional end"] / m).round(1), "rotate into calls today: cash (m)": (rs["end: cash B"] / m).round(1),
+    }, index=rs.index)
+    return out.reset_index(drop=True)
+
+
+PATH_COLUMNS = ("nav_A", "nav_B", "headroom_A", "dry_powder_B", "E_A", "loan", "E_B", "call_val", "call_notional", "cash_B", "loan_B", "spx_tr")
+PATH_NAMES = {"nav_A": "keep the loan: NAV (m)", "nav_B": "rotate into calls: NAV (m)", "headroom_A": "keep the loan: dry powder (m)", "dry_powder_B": "rotate into calls: dry powder (m)",
+              "E_A": "keep the loan: SPX (m)", "loan": "keep the loan: loan (m)", "E_B": "rotate into calls: SPX (m)", "call_val": "rotate into calls: calls (m)",
+              "call_notional": "rotate into calls: call notional (m)", "cash_B": "rotate into calls: cash (m)", "loan_B": "rotate into calls: loan (m)", "spx_tr": "SPX with dividends (start = 1)"}
+
+
+def paths_table(paths: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """The wide tables of ``rolling_paths`` as one long table for export: one row per (start, date) the start was running, USD in millions
+    (``spx_tr`` stays a ratio), columns named as in ``PATH_NAMES``; sorted by start then date."""
+    cols = [c for c in PATH_COLUMNS if c in paths] + [c for c in paths if c not in PATH_COLUMNS]
+    if not cols or paths[cols[0]].empty:
+        return pd.DataFrame(columns=["start", "date"] + [PATH_NAMES.get(c, c) for c in cols])
+    long = pd.concat({PATH_NAMES.get(c, c): paths[c].stack() for c in cols}, axis=1)
+    long.index = long.index.set_names(["date", "start"])
+    long = long.reset_index().sort_values(["start", "date"]).reset_index(drop=True)
+    for c in cols:
+        name = PATH_NAMES.get(c, c)
+        if c != "spx_tr":
+            long[name] = (long[name] / 1e6).round(2)
+        else:
+            long[name] = long[name].round(5)
+    long["start"] = pd.DatetimeIndex(long["start"]).date
+    long["date"] = pd.DatetimeIndex(long["date"]).date
+    return long[["start", "date"] + [PATH_NAMES.get(c, c) for c in cols]]

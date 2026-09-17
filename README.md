@@ -7,16 +7,27 @@ buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so t
 the money is replaced by a new ATM call on the same index units (paid from the payoff, then cash, then SPX); a call
 that expires worthless lapses. Historical data only, September 1997 to today.
 
-**The app** — `app/historical_app.py`, three pages, one sidebar (the setup above, every number editable):
-1. **Keep the loan or rotate** (`app/views/rotation.py`): both portfolios from one start date, held to today — the
-   rotation (SPX sold, notional, premium, loan repaid, week by week), how the two evolve (NAV vs SPX, what each
-   holds, room before a margin call vs capacity to borrow), the rolls by year. Engine
-   `src/fosim/analytics/leverage_stress.py` (daily accounting identity asserted), tests `tests/test_leverage_stress.py`,
-   formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p, limits `docs/LIMITATIONS.md` 17.
-2. **Any start date since 1997** (`app/views/all_starts.py`): the same from every trading day (or week) since 1997 to the
-   last start whose calls have expired, each held to today — final value by start date and its distribution, and whether the
-   rotated portfolio lost its calls (`leverage_stress.rolling_starts`).
-3. **Call premium history** (`app/views/premium_history.py`, own inputs): for every trading day since
+**The app** — `app/historical_app.py`, two pages, one sidebar (the setup above, every number editable; Advanced: withholding
+tax, what happens to a call that expires worthless, what a payoff left after a roll buys, the lending value of the calls,
+the start-date grid):
+1. **Any start date since 1997** (`app/views/all_starts.py`): both portfolios put on at every trading day (or week) from
+   9 Sep 1997 to the last start whose calls have expired, each held to the day chosen in *Held until* — today, or one of
+   the market bottoms (Oct 2002, Mar 2009, Mar 2020, Oct 2022). The page shows: the fan of every trajectory (one colour
+   per start year, light to strong, the rotations that stopped buying calls after a correction in yellow to orange) with
+   the distribution of the final NAV drawn vertically on the right edge; the statistics of the final NAV over the selected
+   start years (percentiles, mean, standard deviation, lowest and highest); the corrections of 20 % or more in the SPX
+   price index (peak, bottom, recovery); one table per market bottom, Keep the loan vs Rotate into calls with the delta —
+   the NAV that day (lowest, 5th and 25th percentile, median), the trajectory with the lowest NAV in detail (when it
+   started and how far from the peak, SPX, calls at market value with the number alive, cash, loan, lending value, dry
+   powder as lending value − loan + cash, LTV and the further fall to a margin call) and the dry powder that day (5th and
+   25th percentile, median); the final value by start date; a CSV download of every start's results. Engine
+   `src/fosim/analytics/leverage_stress.py` (`simulate` with the daily accounting identity asserted, `rolling_starts`,
+   `rolling_paths` with the bottoms sampled exactly, `corrections`, `starts_table`, `paths_table`), tests
+   `tests/test_leverage_stress.py` and `tests/test_app.py` (which cross-checks the bottom tables against direct
+   simulations), formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p, limits `docs/LIMITATIONS.md` 17.
+   `scripts/export_trajectories.py` writes every start's trajectory (NAV, dry powder, balance sheet, month-end samples)
+   to a long CSV under `reports/` (generated files, not committed).
+2. **Call premium history** (`app/views/premium_history.py`, own inputs): for every trading day since
 September 1997 an at-the-money call on **SPXFP** (S&P 500 futures excess-return index) maturing 5 years later
 is bought for a fixed USD amount (default 10 m; notional = premium ÷ premium-% of the day) and, alternatively,
 the same amount is invested in the index. Both are read at the option's maturity and plotted against the

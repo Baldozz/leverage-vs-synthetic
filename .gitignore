@@ -8,5 +8,6 @@ __pycache__/
 reports/*.xlsx
 reports/*.html
 reports/*.xml
+reports/*.csv
 .DS_Store
 ~$*.xlsx

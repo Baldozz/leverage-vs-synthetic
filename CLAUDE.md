@@ -1,8 +1,13 @@
 # CLAUDE.md — project conventions (binding)
 
-Decision-support simulator for a Swiss single-family office: levered cash equity portfolio
-(Strategy A) vs. unlevered 5-year call replacement with dry powder (Strategy B), plus an
-unlevered benchmark (C) and A-with-buffer (D). Full spec: `SPEC.md`. Plan: `docs/PLAN.md`.
+Decision-support tool for a Swiss single-family office. **The live question** (`README.md`): 1 bn in SPX with a
+250 m Lombard loan (lending value 75 %, SOFR + 75 bp, interest capitalised) — **Keep the loan**, or **Rotate into
+calls**: week by week sell SPX, buy 5-year ATM calls on SPXFP sized by the model delta, repay the loan; a call that
+expires in the money is replaced on the same index units, a call that expires worthless lapses. Historical data only
+(Sept 1997 → today), every trading day as a start date, no Monte Carlo. Engine `src/fosim/analytics/leverage_stress.py`,
+app `app/historical_app.py` (two pages), formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p.
+The earlier Monte Carlo simulator (strategies A/B/C/D, `SPEC.md`, `docs/PLAN.md`, `app/streamlit_app.py`) is kept
+for reference and its tests still run.
 
 ## Standard of care
 - Correctness first. Speed, UI and breadth come after.
@@ -46,4 +51,7 @@ Any decision rule at step k may read only market state at indices ≤ k. `Market
 - `.venv/bin/python -m pytest` — full suite (must be green before any stage is declared done).
 - `.venv/bin/ruff check . && .venv/bin/mypy` — must be clean for `src/fosim` and `validation/`.
 - `.venv/bin/python -m fosim.reporting.validation_report` — regenerates `reports/validation_report.html`.
-- `.venv/bin/streamlit run app/historical_app.py` — the decision app (two pages: "Keep the loan or rotate", "Call premium history"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
+- `.venv/bin/streamlit run app/historical_app.py` — the decision app (two pages: "Any start date since 1997", "Call premium history"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
+- `.venv/bin/python scripts/export_trajectories.py [--grid daily] [--sample W]` — every start's trajectory to a long CSV under `reports/` (generated, not committed).
+- Page tests use Streamlit's AppTest on the weekly grid (`at.session_state["s_grid"] = "every week"`); the bottom tables are cross-checked against direct `simulate()` runs — keep that check when the layout changes.
+- The engine module is imported once by the running server: restart it after changing `leverage_stress.py` (page files reload on save).

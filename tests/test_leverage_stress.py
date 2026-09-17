@@ -6,7 +6,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fosim.analytics.leverage_stress import AccountingIdentityError, rolling_starts, simulate
+from fosim.analytics.leverage_stress import (
+    PATH_COLUMNS,
+    PATH_NAMES,
+    AccountingIdentityError,
+    corrections,
+    paths_table,
+    rolling_paths,
+    rolling_starts,
+    simulate,
+    starts_table,
+)
 from fosim.pricing.black_scholes import bsm_greeks, bsm_price
 
 M = 1e6
@@ -84,6 +94,7 @@ def test_roll_cash_flows_rising_and_falling(tmp_path: Path) -> None:
     r2 = info2.rolls[0]
     k2 = p2.index.get_loc(r2.date)
     assert r2.payoff == 0.0 and r2.premium_paid == 0.0 and r2.equity_sold == 0.0 and p2["cash_B"].iloc[k2] == 0.0
+    assert (p2["n_calls"].iloc[:k2] == 1).all() and (p2["n_calls"].iloc[k2:] == 0).all() and (p["n_calls"] == 1).all()   # lapsed: no call from the expiry day; rolled: one call throughout
     assert (p2["call_notional"].iloc[k2:] == 0.0).all() and (p2["call_val"].iloc[k2:] == 0.0).all() and p2["E_B"].iloc[k2] == pytest.approx(p2["E_B"].iloc[k2 - 1] * down[k2] / down[k2 - 1])
     assert np.allclose(p2["exposure_B"].iloc[k2:], p2["E_B"].iloc[k2:])   # only the SPX held is exposed after the lapse
     p3, info3 = simulate("2010-01-04", "2015-12-31", build_tranches=1, replace_worthless=True, file=fd)   # option: replace it anyway, SPX sold to pay
@@ -153,6 +164,37 @@ def test_rolling_start_row_equals_single_path(tmp_path: Path) -> None:
     assert rs2["B: min dry powder"].iloc[0] <= rs2["B: dry powder at trough"].iloc[0]
 
 
+def test_rolling_paths_match_the_single_paths(tmp_path: Path) -> None:
+    n = 8 * 262
+    rng = np.random.default_rng(11)
+    spx = 1000.0 * np.exp(np.cumsum(rng.normal(0.0001, 0.01, n)))
+    f = _file(tmp_path, spx)
+    starts = pd.DatetimeIndex(["2010-06-01", "2012-03-15", "2017-12-10"])
+    rows, paths = rolling_paths(starts, "2017-12-29", columns=("headroom_A", "dry_powder_B"), sample="M", build_tranches=1, file=f)
+    rs = rolling_starts(starts, 5.0, build_tranches=1, file=f, until="2017-12-29")
+    pd.testing.assert_frame_equal(rows, rs)   # the same summary rows
+    assert set(paths) == {"headroom_A", "dry_powder_B"} and list(paths["headroom_A"].columns) == list(rows.index) == [starts[0], starts[1]]   # the Dec-2017 start is less than 30 days before the end
+    for c in ("headroom_A", "dry_powder_B"):
+        w = paths[c]
+        assert w.index.is_monotonic_increasing and w.index[-1] == pd.Timestamp("2017-12-29") and (w.index[:-1] == w.index[:-1] + pd.offsets.MonthEnd(0)).all()   # month-ends, then the last day
+        for s in starts[:2]:
+            p, _ = simulate(s, "2017-12-29", build_tranches=1, file=f)
+            assert w[s].loc[: s - pd.Timedelta(1, unit="D")].isna().all() and w[s].iloc[-1] == p[c].iloc[-1]   # NaN before the start; the end value
+            me = p[c].groupby(p.index.to_period("M")).last()   # the value on the last trading day of each month, keyed by the calendar month-end
+            me.index = me.index.to_timestamp(how="end").normalize()
+            assert np.allclose(w[s].loc[me.index[:-1]], me.iloc[:-1])
+    assert rows.loc[starts[0], "A: headroom end"] == paths["headroom_A"][starts[0]].iloc[-1] and rows.loc[starts[0], "B: dry powder end"] == paths["dry_powder_B"][starts[0]].iloc[-1]
+    e_rows, e_paths = rolling_paths(pd.DatetimeIndex(["2017-12-10"]), "2017-12-29", build_tranches=1, file=f)
+    assert e_rows.empty and all(v.empty for v in e_paths.values())
+    marks = (pd.Timestamp("2013-06-12"), pd.Timestamp("2009-01-05"))   # a trading day inside both paths, and one before every start (ignored)
+    _, mp = rolling_paths(starts[:2], "2017-12-29", columns=("headroom_A",), mark_days=marks, build_tranches=1, file=f)
+    w = mp["headroom_A"]
+    assert marks[0] in w.index and marks[1] not in w.index and w.index.is_monotonic_increasing and not w.index.duplicated().any()
+    for s in starts[:2]:
+        p, _ = simulate(s, "2017-12-29", build_tranches=1, file=f)
+        assert w.loc[marks[0], s] == p.loc[marks[0], "headroom_A"]   # the exact value on the marked day
+
+
 def test_input_validation(tmp_path: Path) -> None:
     f = _file(tmp_path, np.full(50, 1000.0))
     for kw in ({"equity0": 0.0}, {"ltv_equity": 1.5}, {"surplus": "gold"}, {"tenor": 0.0}, {"build_tranches": 0}):
@@ -208,8 +250,81 @@ def test_weekly_ladder_repays_the_loan_step_by_step(tmp_path: Path) -> None:
 def test_weekly_ladder_real_data() -> None:
     p, info = simulate("1997-09-09", "2026-09-14")   # default: 52 weekly tranches
     assert len(info.builds) == 52 and info.build_end.year == 1998 and (p["loan_B"].loc[info.build_end:] == 0).all()
+    assert p["n_calls"].iloc[0] == 1 and p["n_calls"].loc[info.build_end] == 52 and (p["n_calls"].loc[info.build_end:"2002-09-01"] == 52).all() and (p["n_calls"].loc["2003-09-03":] == 0).all()   # 52 alive after the build, all lapsed by Sep-2003
     assert 0.0 < (p["loan_B"] / p["cap_B"]).max() < 0.5
     assert len(info.rolls) == 52 and all(r.payoff == 0.0 and r.premium_paid == 0.0 for r in info.rolls)   # all 52 tranches expire worthless in 2002–03 and lapse
     assert p["nav_B"].iloc[0] == pytest.approx(p["nav_A"].iloc[0])
     _, info_r = simulate("1997-09-09", "2026-09-14", replace_worthless=True)
     assert len(info_r.rolls) >= 52 * 5   # always replace: each tranche rolls every five years
+
+
+def test_starts_table_is_the_rows_in_millions(tmp_path: Path) -> None:
+    n = 8 * 262
+    rng = np.random.default_rng(5)
+    spx = 1000.0 * np.exp(np.cumsum(rng.normal(0.0002, 0.01, n)))
+    f = _file(tmp_path, spx)
+    starts = pd.DatetimeIndex(["2010-06-01", "2011-06-01"])
+    rs = rolling_starts(starts, 5.0, build_tranches=1, file=f, until="2017-12-29")
+    tbl = starts_table(rs)
+    assert len(tbl) == 2 and list(tbl["start"]) == [s.date() for s in starts] and (tbl["end"] == pd.Timestamp("2017-12-29").date()).all()
+    r0, t0 = rs.iloc[0], tbl.iloc[0]
+    assert t0["keep the loan: NAV today (m)"] == pytest.approx(r0["NAV A end"] / M, abs=0.05) and t0["rotate into calls: NAV today (m)"] == pytest.approx(r0["NAV B end"] / M, abs=0.05)
+    assert t0["NAV at start (m)"] == pytest.approx(750.0, abs=0.05) and t0["keep the loan: annualised return"] == pytest.approx((1 + r0["A return"]) ** (1 / r0["years"]) - 1, abs=5e-5)
+    assert t0["keep the loan: lowest dry powder (m)"] == pytest.approx(r0["A: min headroom"] / M, abs=0.05) and t0["rotate into calls: dry powder today (m)"] == pytest.approx(r0["B: dry powder end"] / M, abs=0.05)
+    assert t0["calls expired"] == r0["rolls"] and t0["calls expired worthless"] == r0["B: lapsed"]
+    assert t0["all calls gone on"] == ("" if pd.isna(r0["B: calls lost on"]) else r0["B: calls lost on"].date().isoformat())
+    assert not tbl.isna().any().any()   # a clean CSV: no NaN cells
+    csv = tbl.to_csv(index=False)
+    back = pd.read_csv(pd.io.common.StringIO(csv))
+    assert len(back) == 2 and list(back.columns) == list(tbl.columns)
+
+
+def test_paths_table_is_the_long_form_of_the_paths(tmp_path: Path) -> None:
+    n = 8 * 262
+    rng = np.random.default_rng(9)
+    spx = 1000.0 * np.exp(np.cumsum(rng.normal(0.0002, 0.01, n)))
+    f = _file(tmp_path, spx)
+    starts = pd.DatetimeIndex(["2010-06-01", "2012-03-15"])
+    _rows, paths = rolling_paths(starts, "2017-12-29", columns=PATH_COLUMNS, sample="M", build_tranches=1, file=f)
+    tbl = paths_table(paths)
+    assert list(tbl.columns) == ["start", "date"] + [PATH_NAMES[c] for c in PATH_COLUMNS]
+    assert len(tbl) == int(paths["nav_A"].notna().sum().sum()) and not tbl.isna().any().any()   # one row per (start, date) the start was running, no NaN
+    assert (tbl.groupby("start")["date"].min() >= pd.Series({s.date(): s.date() for s in starts})).all() and (tbl.groupby("start")["date"].max() == pd.Timestamp("2017-12-29").date()).all()
+    s0 = starts[0]
+    p, _ = simulate(s0, "2017-12-29", build_tranches=1, file=f)
+    t0 = tbl[tbl["start"] == s0.date()].set_index("date")
+    assert t0["keep the loan: NAV (m)"].iloc[-1] == pytest.approx(p["nav_A"].iloc[-1] / M, abs=0.005) and t0["SPX with dividends (start = 1)"].iloc[-1] == pytest.approx(p["spx_tr"].iloc[-1], abs=5e-6)
+    me = p["dry_powder_B"].groupby(p.index.to_period("M")).last()
+    me.index = me.index.to_timestamp(how="end").normalize().date
+    assert np.allclose(t0["rotate into calls: dry powder (m)"].loc[me.index[:-1]], me.iloc[:-1] / M, atol=0.005)
+    assert (tbl["rotate into calls: loan (m)"] == 0).all()   # one-shot rotation: no loan left on any sampled date
+    assert paths_table({c: pd.DataFrame() for c in PATH_COLUMNS}).empty
+
+
+def test_corrections_and_lowest_nav(tmp_path: Path) -> None:
+    n = 900
+    t = np.arange(n)
+    spx = np.where(t < 300, 1000.0 + 0.5 * t, np.where(t < 500, 1150.0 - 1.5 * (t - 300), 850.0 + 2.0 * (t - 500)))   # peak 1150 at t=300, trough 850 (−26 %) at t=500, back above at t=650
+    f = _file(tmp_path, spx, base=0.0, tbill=0.0, rate=0.0)
+    dates = pd.bdate_range("2010-01-04", periods=n)
+    c = corrections(0.20, file=f)
+    label = f"{dates[300].year}–{dates[500].year}" if dates[300].year != dates[500].year else f"{dates[500].year}"
+    assert len(c) == 1 and c.index[0] == label and c["peak"].iloc[0] == dates[300] and c["trough"].iloc[0] == dates[500]
+    assert c["drawdown"].iloc[0] == pytest.approx(850 / 1150 - 1) and c["recovered"].iloc[0] == dates[650]
+    assert corrections(0.30, file=f).empty
+    with pytest.raises(ValueError):
+        corrections(1.5, file=f)
+    rs = rolling_starts(pd.DatetimeIndex([dates[0], dates[250]]), 1.0, build_tranches=1, file=f, until=dates[-1])
+    p, _ = simulate(dates[250], dates[-1], build_tranches=1, file=f)
+    assert rs["A: min NAV date"].iloc[1] == dates[500] and rs["A: min NAV"].iloc[1] == pytest.approx(p["nav_A"].min()) and rs["A: LTV at min NAV"].iloc[1] == pytest.approx(p["ltv_A"].loc[dates[500]])
+    assert rs["B: min NAV"].iloc[1] == pytest.approx(p["nav_B"].min()) and rs["B: min NAV date"].iloc[1] == p["nav_B"].idxmin()
+    real = corrections(0.20)
+    assert list(real.index) == ["2000–2002", "2007–2009", "2020", "2022"] and [d.year for d in real["trough"]] == [2002, 2009, 2020, 2022] and (real["drawdown"] < -0.2).all()
+    assert real["recovered"].notna().all() and real.loc["2007–2009", "recovered"].year in (2012, 2013)
+    assert c["peak level"].iloc[0] == pytest.approx(1150.0) and c["trough level"].iloc[0] == pytest.approx(850.0)   # zero dividends: the total-return index is the price
+    px = corrections(0.20, on="price")   # the SPX price index: the well-known peaks and bottoms
+    assert [d.date().isoformat() for d in px["peak"]] == ["2000-03-24", "2007-10-09", "2020-02-19", "2022-01-03"]
+    assert [d.date().isoformat() for d in px["trough"]] == ["2002-10-09", "2009-03-09", "2020-03-23", "2022-10-12"]
+    assert px["trough level"].round(0).tolist() == [777.0, 677.0, 2237.0, 3577.0] and px["peak level"].round(0).tolist() == [1527.0, 1565.0, 3386.0, 4797.0]
+    with pytest.raises(ValueError):
+        corrections(0.2, on="futures")
