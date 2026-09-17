@@ -1,13 +1,22 @@
 # USER_GUIDE.md
 
-## What matters: the call-vs-cash backtest
-`.venv/bin/streamlit run app/historical_app.py --server.runOnSave true` — a single page, nothing else in it.
+## The decision app
+`.venv/bin/streamlit run app/historical_app.py --server.runOnSave true` — two pages, one sidebar.
 
-Inputs: premium / investment (USD m), call tenor (years), first and last strike date (defaults 1997-09-09 → 2021-08-31), premium mode (*market*: implied vol and Treasury of the day for the tenor; *fixed*: one % of notional), cash leg (SPXFP, or SPX with dividends reinvested net of the withholding tax you enter).
+**Sidebar (the setup).** Today: SPX exposure (USD m), Lombard loan (USD m), spread over SOFR (bp), lending value of the SPX (%). The rotation: call tenor (5 / 7 / 10 years), weeks to complete the rotation (52; 1 = all on the start date). Advanced: dividend withholding tax, what happens to a payoff left after a roll (T-bills / SPX / more calls), lending value of the calls.
+
+### Page 1 — Keep the loan or rotate
+Pick a start date (any trading day from 9 Sep 1997); both portfolios are put on that day and held to the last day of the data.
+1. **The rotation**: SPX sold, call notional bought (and the delta that sized it), premium paid, loan repaid (principal plus the interest accrued during the build), the day the rotation is complete.
+2. **How the two portfolios evolve**: net asset value of both against SPX with dividends on the same starting NAV; what each holds (SPX, calls, cash and loan for the rotated portfolio, SPX and loan for the levered one); the room before a margin call (lending value − loan, red; below zero is a margin call) against the capacity to borrow of the rotated portfolio (blue). Three computed lines: peak LTV and least room, least capacity, NAV today with the interest paid vs the premiums paid and payoffs received.
+3. **Rolls**: by year, how many tranches expired, payoffs received, new premiums paid, SPX sold to pay them; *Every roll* lists each one.
+
+### Page 2 — Call premium history
+The call-vs-cash backtest behind the premiums, with its own inputs. Inputs: premium / investment (USD m), call tenor (years), first and last strike date (defaults 1997-09-09 → 2021-08-31), premium mode (*market*: implied vol and Treasury of the day for the tenor; *fixed*: one % of notional), cash leg (SPXFP, or SPX with dividends reinvested net of the withholding tax you enter).
 
 Output: (1) P&L of the call (payoff − premium) and of the cash investment against the **maturity date**, one point per strike day; (2) bold header stating exactly what was computed (tenor, leg, number of strike dates, premium mode); (3) summary table (average / median / best / worst P&L, share of losing strike dates), hit rate, share of calls expiring worthless, premium and notional actually bought; (4) **distribution of the holding-period return** on the same USD committed: overlaid histogram and percentile table (5th…95th, mean, std, probability of a loss, probability of losing everything, mean annualised).
 
-Caveats shown in the tab: strikes are daily so consecutive observations overlap almost entirely (a range of outcomes, not independent draws); no bid/ask, no early unwind; the 5-year vol is extrapolated from the 24-month Bloomberg series (VIX proxy before May 2005). At 7 and 10 years the page uses `ust_7y`/`iv_7y` and `ust_10y`/`iv_10y` (built by `scripts/build_long_tenor_columns.py`; the 7-year yield is interpolated until a `USGG7YR` export is supplied, the vols are extrapolated as at 5 years); for any other tenor without its own columns it warns and falls back to the 5-year series.
+Caveats shown on the page: strikes are daily so consecutive observations overlap almost entirely (a range of outcomes, not independent draws); no bid/ask, no early unwind; the 5-year vol is extrapolated from the 24-month Bloomberg series (VIX proxy before May 2005). At 7 and 10 years the page uses `ust_7y`/`iv_7y` and `ust_10y`/`iv_10y` (built by `scripts/build_long_tenor_columns.py`; the 7-year yield is interpolated until a `USGG7YR` export is supplied, the vols are extrapolated as at 5 years); for any other tenor without its own columns it warns and falls back to the 5-year series.
 
 ## Supporting apps (strategy simulator, kept for reference)
 * **Historical strategy replay** — `.venv/bin/streamlit run app/strategy_replay_app.py`: pick capital, allocation, leverage, start date and Strategy B choices; leave the three historical inputs blank (Lombard cost, cash yield, LT option premium) or fill them; enter each strategy's starting balance sheet (equities / loan / cash, common illiquids) in the table, choose how B accumulates its option book (notional bought per week or month, target book, tenor), and press *Run historical replay* to see what A, B and C would have done through the actual S&P 500 history (weekly or monthly steps). No Monte Carlo.

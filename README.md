@@ -1,6 +1,18 @@
-# Long-dated SPXFP call vs. cash investment — historical backtest (USD only)
+# Keep the loan, or rotate into calls — historical decision tool (USD only)
 
-**Primary analysis** — `app/historical_app.py` (a single page): for every trading day since
+**The question.** Today: 1 bn in SPX with a 250 m Lombard loan on it (lending value 75 %, SOFR + 75 bp, interest
+capitalised). Option 1, **Keep the loan**: nothing changes. Option 2, **Rotate into calls**: week by week sell SPX,
+buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so the SPX-equivalent exposure stays
+1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. Each call is rolled at
+expiry into a new ATM call on the same index units. Historical data only, September 1997 to today.
+
+**The app** — `app/historical_app.py`, two pages, one sidebar (the setup above, every number editable):
+1. **Keep the loan or rotate** (`app/views/rotation.py`): both portfolios from one start date, held to today — the
+   rotation (SPX sold, notional, premium, loan repaid, week by week), how the two evolve (NAV vs SPX, what each
+   holds, room before a margin call vs capacity to borrow), the rolls by year. Engine
+   `src/fosim/analytics/leverage_stress.py` (daily accounting identity asserted), tests `tests/test_leverage_stress.py`,
+   formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p, limits `docs/LIMITATIONS.md` 17.
+2. **Call premium history** (`app/views/premium_history.py`, own inputs): for every trading day since
 September 1997 an at-the-money call on **SPXFP** (S&P 500 futures excess-return index) maturing 5 years later
 is bought for a fixed USD amount (default 10 m; notional = premium ÷ premium-% of the day) and, alternatively,
 the same amount is invested in the index. Both are read at the option's maturity and plotted against the
@@ -10,9 +22,13 @@ implied vol and the 5-year Treasury of that day (q = r for an excess-return inde
 `docs/ASSUMPTIONS.md` 19l/19m for how the 5-year vol series is built from the 24-month Bloomberg series.
 Engine: `src/fosim/analytics/call_vs_cash.py`, tests `tests/test_call_vs_cash.py`, formulas `docs/METHODOLOGY.md` §8.
 
+The Black–Scholes pricer behind both pages is verified independently in `tests/test_bsm_reference.py` (Hull's
+values, 2,000 random cases against a scipy reference, put–call parity, finite-difference Greeks, implied-vol round
+trip, Black-76 equivalence for q = r).
+
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/streamlit run app/historical_app.py --server.runOnSave true   # the backtest
+.venv/bin/streamlit run app/historical_app.py --server.runOnSave true   # the app
 .venv/bin/python -m pytest                                              # full suite
 .venv/bin/ruff check . && .venv/bin/mypy                                # lint / strict typing
 ```

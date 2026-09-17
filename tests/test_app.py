@@ -38,9 +38,25 @@ def bt_end_for(tenor: float) -> date:
     return strike_date_range(tenor)[1].date()
 
 
-def test_backtest_app_renders_without_tabs() -> None:
-    """The primary app (call-vs-cash backtest) is a single page: no tabs, chart + tables rendered at default widgets."""
+def test_rotation_page_renders_one_start_date() -> None:
+    """Page 1: both portfolios from the first data day to today — five metrics, three charts, the roll tables."""
     at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=300)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.metric) == 5 and at.metric[0].label == "SPX sold" and at.metric[3].label == "Loan repaid"
+    assert len(at.get("plotly_chart")) == 3
+    assert len(at.dataframe) == 2  # rolls by year, every roll
+    assert "52 weekly steps" in str(at.metric[4].delta) and at.metric[3].value.endswith(" m") and float(at.metric[3].value[:-2].replace(",", "")) > 250  # loan repaid = 250 m + interest during the build
+    assert any("the loan is gone from" in m.value for m in at.markdown) and not any("**a margin call**" in m.value for m in at.markdown)  # bold = a call happened
+    at.sidebar.number_input(key="s_weeks").set_value(1).run()  # one shot: one build step, the whole 250 m repaid on day one
+    assert not at.exception, [e.value for e in at.exception]
+    assert "1 weekly step" in str(at.metric[4].delta) and at.metric[3].value == "250 m"
+
+
+def test_premium_history_page_unchanged() -> None:
+    """Page 2 (call-vs-cash backtest): no tabs, chart + tables rendered at default widgets; its own tenor drives every label."""
+    at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=300)
+    at.switch_page("views/premium_history.py")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.tabs) == 0

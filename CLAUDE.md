@@ -46,4 +46,4 @@ Any decision rule at step k may read only market state at indices ≤ k. `Market
 - `.venv/bin/python -m pytest` — full suite (must be green before any stage is declared done).
 - `.venv/bin/ruff check . && .venv/bin/mypy` — must be clean for `src/fosim` and `validation/`.
 - `.venv/bin/python -m fosim.reporting.validation_report` — regenerates `reports/validation_report.html`.
-- `.venv/bin/streamlit run app/streamlit_app.py` — UI.
+- `.venv/bin/streamlit run app/historical_app.py` — the decision app (two pages: "Keep the loan or rotate", "Call premium history"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
