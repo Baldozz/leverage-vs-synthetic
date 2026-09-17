@@ -3,8 +3,9 @@
 **The question.** Today: 1 bn in SPX with a 250 m Lombard loan on it (lending value 75 %, SOFR + 75 bp, interest
 capitalised). Option 1, **Keep the loan**: nothing changes. Option 2, **Rotate into calls**: week by week sell SPX,
 buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so the SPX-equivalent exposure stays
-1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. Each call is rolled at
-expiry into a new ATM call on the same index units. Historical data only, September 1997 to today.
+1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. A call that expires in
+the money is replaced by a new ATM call on the same index units (paid from the payoff, then cash, then SPX); a call
+that expires worthless lapses. Historical data only, September 1997 to today.
 
 **The app** — `app/historical_app.py`, two pages, one sidebar (the setup above, every number editable):
 1. **Keep the loan or rotate** (`app/views/rotation.py`): both portfolios from one start date, held to today — the

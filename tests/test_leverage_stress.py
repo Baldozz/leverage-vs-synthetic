@@ -79,9 +79,16 @@ def test_roll_cash_flows_rising_and_falling(tmp_path: Path) -> None:
     assert p["call_val"].iloc[k] == pytest.approx(r.premium_paid) and p["cash_B"].iloc[k] == pytest.approx(r.payoff - r.premium_paid)
     assert p["call_notional"].iloc[k] == pytest.approx(info.units0 * ST)
     down = 1000.0 * np.exp(-0.05 * np.arange(n) / 262)
-    p2, info2 = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=_file(tmp_path, down, base=0.0, tbill=0.0, rate=0.0, name="down.csv"))
+    fd = _file(tmp_path, down, base=0.0, tbill=0.0, rate=0.0, name="down.csv")
+    p2, info2 = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=fd)   # default: a worthless call lapses, nothing bought, no SPX sold
     r2 = info2.rolls[0]
-    assert r2.payoff == 0.0 and r2.equity_sold == pytest.approx(r2.premium_paid) and p2["cash_B"].iloc[p2.index.get_loc(r2.date)] == 0.0
+    k2 = p2.index.get_loc(r2.date)
+    assert r2.payoff == 0.0 and r2.premium_paid == 0.0 and r2.equity_sold == 0.0 and p2["cash_B"].iloc[k2] == 0.0
+    assert (p2["call_notional"].iloc[k2:] == 0.0).all() and (p2["call_val"].iloc[k2:] == 0.0).all() and p2["E_B"].iloc[k2] == pytest.approx(p2["E_B"].iloc[k2 - 1] * down[k2] / down[k2 - 1])
+    assert np.allclose(p2["exposure_B"].iloc[k2:], p2["E_B"].iloc[k2:])   # only the SPX held is exposed after the lapse
+    p3, info3 = simulate("2010-01-04", "2015-12-31", build_tranches=1, replace_worthless=True, file=fd)   # option: replace it anyway, SPX sold to pay
+    r3 = info3.rolls[0]
+    assert r3.payoff == 0.0 and r3.premium_paid > 0 and r3.equity_sold == pytest.approx(r3.premium_paid) and p3["cash_B"].iloc[k2] == 0.0 and p3["call_notional"].iloc[k2] > 0
     p4, _ = simulate("2010-01-04", "2015-12-31", surplus="equity", build_tranches=1, file=f)
     assert p4["cash_B"].iloc[k] == 0.0 and p4["E_B"].iloc[k] > p["E_B"].iloc[k]
     p5, info5 = simulate("2010-01-04", "2015-12-31", surplus="calls", build_tranches=1, file=f)
@@ -152,7 +159,10 @@ def test_real_data_1997_path_and_rolling_starts() -> None:
     p, info = simulate("1997-09-09", "2026-09-14", build_tranches=1)
     assert 0.10 < info.premium0 < 0.25 and 0.40 < info.delta0 < 0.60 and 330 * M < info.rotation < 400 * M and info.notional0 == pytest.approx(info.rotation / info.delta0) and not info.fallback
     assert p["ltv_A"].iloc[0] == pytest.approx(0.25 / 0.75) and 0.60 < p["ltv_A"].max() < 0.75 and (p["headroom_A"] > 0).all()   # LTV = loan / (75 % × equity): never 100 %
-    assert len(info.rolls) == 5 and all(r.premium_paid > 0 for r in info.rolls)
+    # the Sep-1997 call expires worthless in Sep-2002 and lapses (user's rule): one expiry, nothing bought, no calls afterwards
+    assert len(info.rolls) == 1 and info.rolls[0].date.year == 2002 and info.rolls[0].payoff == 0.0 and info.rolls[0].premium_paid == 0.0 and (p["call_notional"].loc["2002-09-10":] == 0).all()
+    _, info_r = simulate("1997-09-09", "2026-09-14", build_tranches=1, replace_worthless=True)   # option: always replace → five rolls, every premium paid
+    assert len(info_r.rolls) == 5 and all(r.premium_paid > 0 for r in info_r.rolls)
     k = int(p["drawdown"].to_numpy().argmin())   # the deepest fall on the record (March 2009): B's capacity to borrow beats A's room
     assert p.index[k].year == 2009 and p["cap_B"].iloc[k] > p["headroom_A"].iloc[k] > 0
     rs = rolling_starts(pd.date_range("1997-10-01", "2021-09-01", freq="MS"), 5.0, build_tranches=1)
@@ -189,5 +199,8 @@ def test_weekly_ladder_repays_the_loan_step_by_step(tmp_path: Path) -> None:
 def test_weekly_ladder_real_data() -> None:
     p, info = simulate("1997-09-09", "2026-09-14")   # default: 52 weekly tranches
     assert len(info.builds) == 52 and info.build_end.year == 1998 and (p["loan_B"].loc[info.build_end:] == 0).all()
-    assert 0.0 < (p["loan_B"] / p["cap_B"]).max() < 0.5 and len(info.rolls) >= 52 * 5
+    assert 0.0 < (p["loan_B"] / p["cap_B"]).max() < 0.5
+    assert len(info.rolls) == 52 and all(r.payoff == 0.0 and r.premium_paid == 0.0 for r in info.rolls)   # all 52 tranches expire worthless in 2002–03 and lapse
     assert p["nav_B"].iloc[0] == pytest.approx(p["nav_A"].iloc[0])
+    _, info_r = simulate("1997-09-09", "2026-09-14", replace_worthless=True)
+    assert len(info_r.rolls) >= 52 * 5   # always replace: each tranche rolls every five years

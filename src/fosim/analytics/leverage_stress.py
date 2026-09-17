@@ -11,8 +11,9 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
                   that day, ≈ 45–55 %), premium c_w · N_w, and the cash x_w − c_w · N_w repays an equal share of the loan
                   then outstanding  ⇒  x_w = (L_w / remaining steps) / (1 − c_w/δ_w); the loan is gone after the last step
                   E_B(t) = (E₀ − x) · TR(t)/TR(t₀);  calls marked daily (BSM, q = r, remaining tenor);
-                  at expiry the payoff is cashed and a new ATM call on the same index units is bought, paid
-                  from the payoff, then cash, then by selling equity; payoff left over: T-bills, equity or more calls
+                  at expiry the payoff is cashed; a call that ends in the money is replaced by a new ATM call on the same
+                  index units, paid from the payoff, then cash, then by selling equity (payoff left over: T-bills, equity
+                  or more calls); a call that expires worthless lapses (nothing to reinvest) unless ``replace_worthless``
                   dry powder_B = capacity_B + cash (an optional cash buffer can be kept at t₀)
                   capacity_B = ℓ_E · E_B + ℓ_C · call value   (the lending value; no loan)
 
@@ -103,13 +104,15 @@ def _nearest_index(dates: np.ndarray, target: np.datetime64) -> int:
 def simulate(
     start: str | pd.Timestamp, end: str | pd.Timestamp, equity0: float = 1000e6, loan0: float = 250e6, spread: float = 0.0075,
     ltv_equity: float = 0.75, ltv_call: float = 0.0, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
-    surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52,
+    surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = False,
     file: Path | str | None = None,
 ) -> tuple[pd.DataFrame, StressInfo]:
     """Daily path of both setups from ``start`` to ``end`` (nearest trading days). See the module docstring.
 
     ``surplus``: what B does with payoff cash left after paying the roll premium — ``"cash"`` (T-bills), ``"equity"`` (buy SPX)
     or ``"calls"`` (buy more ATM calls at the same premium fraction, so the whole payoff stays exposed to the index).
+    ``replace_worthless``: a call that expires worthless is not replaced (default: nothing to reinvest, no SPX sold); ``True`` buys
+    the new ATM call anyway, paid from cash then by selling SPX. A call that expires in the money is always replaced.
     ``cash_buffer``: extra equity rotated at t₀ so that B keeps this much cash after repaying the loan (0 = fully invested).
     ``delta``: the call delta used to size the sleeve (notional = equity sold / delta). ``None`` (default) uses the model delta of
     the ATM call at t₀, ∂C/∂S of BSM with q = r — implicit in the option being at the money; a number overrides it (scripted use).
@@ -248,7 +251,10 @@ def simulate(
             payoff_today += payoff
             cash += payoff
             delta_notional -= t.delta0 * t.units * t.strike
-            if k < n - 1:
+            if k < n - 1 and payoff <= 0.0 and not replace_worthless:   # expired worthless: nothing to reinvest, the call lapses
+                rolls.append(Roll(pd.Timestamp(dates[k]), atm(k)[0], 0.0, 0.0, 0.0))
+                is_roll[k] = True
+            elif k < n - 1:
                 c_k, d_k = atm(k)
                 notional = t.units * S[k]            # same index units: the new ATM notional is units × today's index
                 premium = c_k * notional

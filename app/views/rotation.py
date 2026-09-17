@@ -26,7 +26,8 @@ first_day, last_day = data_bounds()
 st.title("Keep the loan, or rotate into calls")
 st.caption(f"**{A}**: {s.equity / M:,.0f} m in SPX with a {s.loan / M:,.0f} m Lombard loan at SOFR + {s.spread * 1e4:.0f} bp, interest capitalised; lending value {s.lv_equity:.0%}. "
            f"**{B}**: every week sell SPX, buy {s.tenor:g}-year ATM calls on SPXFP sized by delta so the SPX-equivalent exposure stays {s.equity / M:,.0f} m, and repay an equal share of the loan; "
-           f"after {s.build} week{'s' if s.build > 1 else ''} the loan is gone. Each call is rolled at expiry into a new ATM call on the same index units.")
+           f"after {s.build} week{'s' if s.build > 1 else ''} the loan is gone. A call that expires in the money is replaced by a new ATM call on the same index units, paid from the payoff, then cash, then SPX; "
+           + ("a call that expires worthless is not replaced." if not s.replace_worthless else "a call that expires worthless is replaced too, SPX sold to pay it."))
 
 latest_start = last_day - pd.Timedelta(7 * (s.build - 1) + 30, unit="D")
 start = st.date_input("Start date", first_day.date(), min_value=first_day.date(), max_value=latest_start.date(), key="r_start", help="Both portfolios are put on this day and held to the last day of the data.")
@@ -83,13 +84,14 @@ st.subheader("Rolls")
 if info.rolls:
     rl = pd.DataFrame({"Date": [r.date for r in info.rolls], "Payoff received (m)": [r.payoff / M for r in info.rolls], "New premium paid (m)": [r.premium_paid / M for r in info.rolls],
                        "Premium (% of notional)": [r.premium_frac for r in info.rolls], "SPX sold to pay it (m)": [r.equity_sold / M for r in info.rolls]})
-    by_year = rl.groupby(rl["Date"].dt.year).agg(**{"Tranches rolled": ("Date", "size"), "Payoff received (m)": ("Payoff received (m)", "sum"), "New premium paid (m)": ("New premium paid (m)", "sum"),
-                                                     "Premium (% of notional)": ("Premium (% of notional)", "mean"), "SPX sold to pay it (m)": ("SPX sold to pay it (m)", "sum")})
+    rl["Expired worthless"] = rl["Payoff received (m)"] <= 0.0
+    by_year = rl.groupby(rl["Date"].dt.year).agg(**{"Calls expired": ("Date", "size"), "Expired worthless": ("Expired worthless", "sum"), "Payoff received (m)": ("Payoff received (m)", "sum"),
+                                                     "New premium paid (m)": ("New premium paid (m)", "sum"), "Premium (% of notional)": ("Premium (% of notional)", "mean"), "SPX sold to pay it (m)": ("SPX sold to pay it (m)", "sum")})
     by_year.index.name = "Year"
-    st.dataframe(by_year.style.format("{:,.1f}").format("{:.1%}", subset=["Premium (% of notional)"]).format("{:d}", subset=["Tranches rolled"]), width="stretch", height=table_height(len(by_year)))
-    with st.expander("Every roll"):
+    st.dataframe(by_year.style.format("{:,.1f}").format("{:.1%}", subset=["Premium (% of notional)"]).format("{:d}", subset=["Calls expired", "Expired worthless"]), width="stretch", height=table_height(len(by_year)))
+    with st.expander("Every expiry"):
         rl["Date"] = rl["Date"].dt.date
-        st.dataframe(rl.style.format("{:,.1f}").format("{:.1%}", subset=["Premium (% of notional)"]), width="stretch", hide_index=True, height=min(table_height(len(rl)), 600))
+        st.dataframe(rl.drop(columns="Expired worthless").style.format("{:,.1f}").format("{:.1%}", subset=["Premium (% of notional)"]), width="stretch", hide_index=True, height=min(table_height(len(rl)), 600))
 else:
     st.markdown("No call has expired yet from this start date.")
 st.caption("Calls are priced and marked with Black–Scholes on SPXFP (q = r) at the implied vol of the day for the tenor, extrapolated from the 24-month Bloomberg series; "

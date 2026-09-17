@@ -3,13 +3,13 @@
 ## The decision app
 `.venv/bin/streamlit run app/historical_app.py --server.runOnSave true` — two pages, one sidebar.
 
-**Sidebar (the setup).** Today: SPX exposure (USD m), Lombard loan (USD m), spread over SOFR (bp), lending value of the SPX (%). The rotation: call tenor (5 / 7 / 10 years), weeks to complete the rotation (52; 1 = all on the start date). Advanced: dividend withholding tax, what happens to a payoff left after a roll (T-bills / SPX / more calls), lending value of the calls.
+**Sidebar (the setup).** Today: SPX exposure (USD m), Lombard loan (USD m), spread over SOFR (bp), lending value of the SPX (%). The rotation: call tenor (5 / 7 / 10 years), weeks to complete the rotation (52; 1 = all on the start date). Advanced: dividend withholding tax, whether a call that expires worthless is replaced (default: not replaced; a call that ends in the money is always replaced on the same index units, paid from the payoff, then cash, then SPX), what happens to a payoff left after a roll (T-bills / SPX / more calls), lending value of the calls.
 
 ### Page 1 — Keep the loan or rotate
 Pick a start date (any trading day from 9 Sep 1997); both portfolios are put on that day and held to the last day of the data.
 1. **The rotation**: SPX sold, call notional bought (and the delta that sized it), premium paid, loan repaid (principal plus the interest accrued during the build), the day the rotation is complete.
 2. **How the two portfolios evolve**: net asset value of both against SPX with dividends on the same starting NAV; what each holds (SPX, calls, cash and loan for the rotated portfolio, SPX and loan for the levered one); the room before a margin call (lending value − loan, red; below zero is a margin call) against the capacity to borrow of the rotated portfolio (blue). Three computed lines: peak LTV and least room, least capacity, NAV today with the interest paid vs the premiums paid and payoffs received.
-3. **Rolls**: by year, how many tranches expired, payoffs received, new premiums paid, SPX sold to pay them; *Every roll* lists each one.
+3. **Rolls**: by year, how many calls expired and how many worthless, payoffs received, new premiums paid, SPX sold to pay them; *Every expiry* lists each one.
 
 ### Page 2 — Call premium history
 The call-vs-cash backtest behind the premiums, with its own inputs. Inputs: premium / investment (USD m), call tenor (years), first and last strike date (defaults 1997-09-09 → 2021-08-31), premium mode (*market*: implied vol and Treasury of the day for the tenor; *fixed*: one % of notional), cash leg (SPXFP, or SPX with dividends reinvested net of the withholding tax you enter).

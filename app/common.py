@@ -32,6 +32,7 @@ class Setup:
     tenor: float           # years
     build: int             # weekly steps of the rotation (1 = one shot)
     surplus: str           # "cash" | "equity" | "calls"
+    replace_worthless: bool = False   # a call that expires worthless: lapses (False) or is replaced, SPX sold to pay (True)
 
 
 _SURPLUS = {"kept in T-bills": "cash", "reinvested in SPX": "equity", "reinvested in more calls": "calls"}
@@ -50,7 +51,8 @@ def sidebar_setup() -> Setup:
         st.number_input("Weeks to complete the rotation", 1, 156, 52, 1, key="s_weeks", help="Each week: sell SPX, buy one tranche of ATM calls sized by delta, repay an equal share of the loan. 1 = all on the start date.")
         with st.expander("Advanced"):
             st.number_input("Dividend withholding tax (%)", 0.0, 50.0, 15.0, 1.0, key="s_wht")
-            st.radio("Payoff left after a roll", list(_SURPLUS), key="s_surplus", help="Each expiring tranche is rolled the same day into a new ATM call on the same index units; this is what happens to any payoff left over.")
+            st.radio("A call that expires worthless is", ["not replaced", "replaced, SPX sold to pay it"], key="s_worthless", help="A call that expires in the money is always replaced by a new ATM call on the same index units, paid from the payoff, then cash, then by selling SPX.")
+            st.radio("Payoff left after a roll", list(_SURPLUS), key="s_surplus", help="What happens to the part of a payoff not needed for the new call's premium.")
             st.number_input("Lending value of the calls (%)", 0.0, 100.0, 0.0, 5.0, key="s_lv_calls")
         st.caption("Historical data only, September 1997 to today.")
     return setup()
@@ -60,7 +62,7 @@ def setup() -> Setup:
     """The Setup from the sidebar widgets' session state (pages run after the entry script has drawn them)."""
     s = st.session_state
     return Setup(float(s["s_equity"]) * M, float(s["s_loan"]) * M, float(s["s_spread"]) / 1e4, float(s["s_lv"]) / 100.0, float(s["s_lv_calls"]) / 100.0, float(s["s_wht"]) / 100.0,
-                 float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])])
+                 float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"))
 
 
 def data_bounds() -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -72,7 +74,7 @@ def data_bounds() -> tuple[pd.Timestamp, pd.Timestamp]:
 def simulate_cached(start: str, end: str, s: Setup) -> tuple[pd.DataFrame, lvs.StressInfo]:
     """Both portfolios from ``start`` to ``end`` on the sidebar setup."""
     return lvs.simulate(start, end, equity0=s.equity, loan0=s.loan, spread=s.spread, ltv_equity=s.lv_equity, ltv_call=s.lv_calls, tenor=s.tenor, wht=s.wht,
-                        surplus=s.surplus, cash_buffer=0.0, delta=None, build_tranches=s.build)
+                        surplus=s.surplus, cash_buffer=0.0, delta=None, build_tranches=s.build, replace_worthless=s.replace_worthless)
 
 
 def table_height(n_rows: int) -> int:
