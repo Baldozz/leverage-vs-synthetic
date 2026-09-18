@@ -328,3 +328,14 @@ def test_corrections_and_lowest_nav(tmp_path: Path) -> None:
     assert px["trough level"].round(0).tolist() == [777.0, 677.0, 2237.0, 3577.0] and px["peak level"].round(0).tolist() == [1527.0, 1565.0, 3386.0, 4797.0]
     with pytest.raises(ValueError):
         corrections(0.2, on="futures")
+
+
+def test_cumulative_cost_columns_match_the_summary() -> None:
+    """interest_cum_A / premiums_cum_B / payoffs_cum_B are running totals that end on the sums reported per start (page 1, worst-trajectory block)."""
+    p, info = simulate("2003-03-10", "2012-12-31")   # calls struck in the 2003 trough expire in the money in 2008: payoffs > 0
+    assert p["interest_cum_A"].iloc[-1] == pytest.approx(p["interest_A"].sum()) and p["interest_cum_A"].iloc[0] == 0.0
+    assert p["premiums_cum_B"].iloc[-1] == pytest.approx(sum(b.premium_paid for b in info.builds) + sum(r.premium_paid for r in info.rolls))
+    assert p["premiums_cum_B"].iloc[0] == pytest.approx(info.builds[0].premium_paid)
+    assert p["payoffs_cum_B"].iloc[-1] == pytest.approx(sum(r.payoff for r in info.rolls)) and p["payoffs_cum_B"].iloc[-1] > 0.0
+    for c in ("interest_cum_A", "premiums_cum_B", "payoffs_cum_B"):
+        assert (np.diff(p[c].to_numpy()) >= -1e-9).all()

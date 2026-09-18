@@ -197,6 +197,7 @@ def simulate(
     cash = 0.0
     E_B, call_val, call_notional, cash_B, loan_B_arr = (np.empty(n) for _ in range(5))
     eq_pnl_B, call_pnl_B, cash_int, interest_B, exposure_B = (np.zeros(n) for _ in range(5))
+    prem_day, pay_day = np.zeros(n), np.zeros(n)   # premiums paid / payoffs received on the day (build, rolls)
     is_roll = np.zeros(n, dtype=bool)
     n_calls = np.zeros(n, dtype=np.int64)          # tranches alive at the end of each day
     rolls: list[Roll] = []
@@ -235,6 +236,7 @@ def simulate(
         return premium
 
     prem_today = build_step(0, n_tr)
+    prem_day[0] = prem_today
     E_B[0], call_val[0], call_notional[0], cash_B[0], loan_B_arr[0] = eq_units * tr[0], prem_today, tot_notional, cash, loan_B
     n_calls[0] = sum(len(ts) for ts in live.values())
     exposure_B[0] = E_B[0] + delta_notional
@@ -280,6 +282,7 @@ def simulate(
                 new_premium += premium
                 rolls.append(Roll(pd.Timestamp(dates[k]), c_k, payoff, premium, sold))
                 is_roll[k] = True
+        prem_day[k], pay_day[k] = new_premium, payoff_today
         call_val[k] = marks[k] + new_premium
         call_pnl_B[k] = marks[k] + payoff_today - call_val[k - 1]   # value of the surviving tranches + payoffs realised, vs yesterday's book
         E_B[k] = eq_units * tr[k]
@@ -308,6 +311,7 @@ def simulate(
         "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
         "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr + cash_B, "nav_B": nav_B,
         "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
+        "interest_cum_A": np.cumsum(interest), "premiums_cum_B": np.cumsum(prem_day), "payoffs_cum_B": np.cumsum(pay_day),   # costs since the start, to each day
     }, index=pd.DatetimeIndex(d.date, name="date"))
     info = StressInfo(start=pd.Timestamp(dates[0]), end=pd.Timestamp(dates[-1]), premium0=tot_premium / tot_notional, rotation=tot_sold, delta0=tot_sold / tot_notional, notional0=tot_notional,
                       units0=sum(b.premium_paid / b.premium_frac for b in builds) / S[0], loan_base0=float(base[0]), rate_col=rate_col, vol_col=vol_col, tenor=float(tenor),
