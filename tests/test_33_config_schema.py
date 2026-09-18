@@ -38,7 +38,7 @@ def test_default_config_loads(raw: dict[str, Any]) -> None:
 
 def test_non_usd_currency_rejected(raw: dict[str, Any]) -> None:
     bad = copy.deepcopy(raw)
-    bad["run"]["currency"] = "CHF"
+    bad["run"]["currency"] = "EUR"
     with pytest.raises(ValidationError, match="USD"):
         SimConfig.model_validate(bad)
 
@@ -52,7 +52,7 @@ def test_nested_currency_field_rejected(raw: dict[str, Any]) -> None:
 
 def test_fx_series_rejected(raw: dict[str, Any]) -> None:
     bad = copy.deepcopy(raw)
-    bad["fx"] = {"pair": "USDCHF", "spot": 0.85}
+    bad["fx"] = {"pair": "EURUSD", "spot": 1.10}
     with pytest.raises(ValidationError, match="(?i)fx|usd"):
         SimConfig.model_validate(bad)
 

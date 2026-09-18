@@ -646,7 +646,7 @@ def _usd_guard(obj: Any, path: str = "") -> None:
             kl = key.lower()
             p = f"{path}.{key}" if path else key
             if "currency" in kl and (not isinstance(v, str) or v.upper() != "USD"):
-                raise ValueError(f"{p}: only USD is supported (got {v!r}); FX/CHF views are out of scope")
+                raise ValueError(f"{p}: only USD is supported (got {v!r}); FX / non-USD views are out of scope")
             if kl == "fx" or kl.startswith("fx_") or kl.endswith("_fx") or "quanto" in kl:
                 raise ValueError(f"{p}: FX / quanto inputs are out of scope — the model is USD only")
             if isinstance(v, str) and v.strip().lower() == "quanto":

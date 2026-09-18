@@ -1,6 +1,6 @@
 # CLAUDE.md — project conventions (binding)
 
-Decision-support tool for a Swiss single-family office. **The live question** (`README.md`): 1 bn in SPX with a
+Investment decision-support tool. **The live question** (`README.md`): 1 bn in SPX with a
 250 m Lombard loan (lending value 75 %, SOFR + 75 bp, interest capitalised) — **Keep the loan**, or **Rotate into
 calls**: week by week sell SPX, buy 5-year ATM calls on SPXFP sized by the model delta, repay the loan; a call that
 expires in the money is replaced on the same index units, a call that expires worthless lapses. Historical data only

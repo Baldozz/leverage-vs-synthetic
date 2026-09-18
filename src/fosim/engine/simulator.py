@@ -420,7 +420,7 @@ class Simulator:
         amt = (sp.pct_nav_pa * np.maximum(st.nav, 0.0) + sp.fixed_usd_pa) / 12.0 * st.alive
         st.cash -= amt
         ctx.add_component(k, "spending", -amt)
-        ctx.ledger.post(k, "cash", -amt, "family-office spending")
+        ctx.ledger.post(k, "cash", -amt, "spending")
 
     def record_shortfall(self, ctx: StrategyContext, k: int) -> None:
         st = ctx.state

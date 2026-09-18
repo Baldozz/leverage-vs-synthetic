@@ -147,7 +147,7 @@ def build_ic_report(
         "<li>Lombard terms, LTVs and advance-rate cuts are bank-specific and discretionary; the modelled stress schedule is an assumption.</li>"
         "<li>Illiquid marks are appraisal-based (smoothed); economic risk is understated by reported marks.</li>"
         "<li>Monthly stepping understates intra-month drawdowns and margin-call frequency — run daily for margin-risk conclusions.</li>"
-        "<li>All-USD simplification: FX risk versus the family office's CHF reference currency is deliberately ignored. Taxes beyond simple withholding and stamp-duty costs are not modelled.</li>"
+        "<li>All-USD simplification: FX risk versus a non-USD reference currency is deliberately ignored. Taxes beyond simple withholding and stamp-duty costs are not modelled.</li>"
         "<li>Model risk in jump and vol dynamics; Monte Carlo sampling error (see standard errors); no behavioural or governance constraints.</li>"
         "</ul><p>This report is decision support produced by a simulation model with placeholder defaults; it is not investment advice and must be read with docs/LIMITATIONS.md.</p></div></body></html>"
     )

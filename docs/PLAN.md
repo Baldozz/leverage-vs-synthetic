@@ -6,7 +6,7 @@ whose default is the value the spec names as default**. Nothing is hard-wired.
 
 ## 1. Understanding of the problem
 
-A family office with NAV ≈ USD 1,000m (70% listed equities / 30% illiquids) borrows 25% of NAV on a
+An investor with NAV ≈ USD 1,000m (70% listed equities / 30% illiquids) borrows 25% of NAV on a
 Lombard facility (Strategy A). It is considering repaying the loan and replacing direct equity
 exposure with a monthly ladder of 5-year at-the-money index calls, holding the unspent premium as
 dry powder (Strategy B). The tool must answer: is B feasible and preferable to A on return,

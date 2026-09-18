@@ -7,7 +7,7 @@ Read together with the model-risk disclaimer in every IC report.
 3. **Lombard terms are bank-specific and discretionary.** LTVs, stress haircuts, thresholds, spreads, floors and the facility limit are placeholders; banks can cut advance rates or the facility at will. Facility renewal re-pricing (`renewal_years`, `renewal_spread_stress`) is not applied by the v1 engine.
 4. **Appraisal-based illiquid marks** (Geltner smoothing) understate true volatility and correlation; the official NAV uses reported marks (config switch), risk metrics can use true marks. Fund cash-flow timing follows a stylised Takahashi–Alexander model.
 5. **Monthly stepping understates margin risk**: intra-month drawdowns and calls are invisible. Use `run.dt: daily` (fewer paths) for margin-risk conclusions; the UI warns.
-6. **All-USD simplification.** FX risk versus the family office's CHF reference currency is deliberately ignored (no FX module exists by design).
+6. **All-USD simplification.** FX risk versus a non-USD reference currency is deliberately ignored (no FX module exists by design).
 7. **Taxes** are limited to dividend withholding and optional stamp duty; treatment of option gains, capital gains and the tax status of the structures is out of scope.
 8. **Model risk in jump and vol dynamics**: Merton jumps with a common clock, log-OU implied vol with a term-structure elasticity and linear skew, and a linear implied–realised coupling are stylised. Historical bootstrap depends entirely on the user's data window.
 9. **Monte Carlo sampling error**: all headline metrics carry standard errors; tornado/breakeven results at small path counts are noisy (the breakeven solver flags unreliable results).

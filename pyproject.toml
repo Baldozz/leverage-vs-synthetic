@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fosim"
 version = "0.1.0"
-description = "Leverage vs. long-dated call replacement simulator (single-family office decision support, USD only)"
+description = "Leverage vs. long-dated call replacement simulator (investment decision support, USD only)"
 requires-python = ">=3.11"
 dependencies = [
     "numpy==2.5.3",

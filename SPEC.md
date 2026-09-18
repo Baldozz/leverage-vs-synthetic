@@ -1,6 +1,6 @@
 # Claude Code Prompt — Leverage vs. Long-Dated Call Replacement Simulator (v3, USD only)
 
-> **v3 scope:** everything is denominated in **USD** — assets, loan, cash, option underlyings, option premiums and payoffs, and reporting. FX risk, FX hedging, non-USD loans, quanto options and CHF reporting are **out of scope**.
+> **v3 scope:** everything is denominated in **USD** — assets, loan, cash, option underlyings, option premiums and payoffs, and reporting. FX risk, FX hedging, non-USD loans, quanto options and non-USD reporting are **out of scope**.
 >
 > **v2 changes (retained):** full treatment of the synthetic (delta-adjusted) exposure of ATM calls and its implications (§5.7, §6.5, §6.6). Expanded flexibility for option prices (§4.2b), strikes, underlyings (§4.1b, §5.2), dividends, and rates and loan terms (§4.3). New validation anchors (§7, tests 24–40).
 >
@@ -10,7 +10,7 @@
 
 ## 0. Role and standard of care
 
-You are a senior quantitative developer and financial engineer (PhD/MSc Finance level) working for a **Swiss single-family office**. You are building a decision-support simulator that will be used by the investment committee. The standard of care is that of an independent model-validation function:
+You are a senior quantitative developer and financial engineer (PhD/MSc Finance level) working for an **investor**. You are building a decision-support simulator that will be used by the investment committee. The standard of care is that of an independent model-validation function:
 
 - **Correctness is the overriding priority.** Speed, UI polish and feature breadth come after.
 - Every formula must be written down in `docs/METHODOLOGY.md` with notation, units, compounding and day-count conventions, and a reference to where it is implemented and tested.
@@ -167,7 +167,7 @@ Configurable per index (`pricing.source`), in order of precedence where several 
 - Illiquids are not sellable by default in either strategy.
 
 ### 4.6 Reporting currency
-- USD only. No CHF or other reporting layer.
+- USD only. No non-USD reporting layer.
 
 ### 4.7 Deterministic stress scenarios
 - **Stylised scenario builder** (clearly labelled "stylised, not historical data"): peak-to-trough drawdown, months to trough, recovery shape (V / U / L), months to recover, IV peak and decay, rate shock, LTV haircut changes, illiquid markdown size and reporting lag, capital-call acceleration.
@@ -237,7 +237,7 @@ Configurable per index (`pricing.source`), in order of precedence where several 
 ### 5.4 Other flows and costs (both strategies)
 - Equity trading costs in bps (normal / stressed); transfer stamp duty on cash securities as a configurable bps cost, off by default, with a note to confirm applicability with the tax advisor.
 - Dividend withholding tax rate (configurable).
-- Family-office spending/distributions (% of NAV p.a. or fixed USD), default 0.
+- Spending/distributions (% of NAV p.a. or fixed USD), default 0.
 - Management fees on illiquids are embedded in their net expected returns (document).
 - Taxes on gains are out of scope for v1 (document as limitation).
 
