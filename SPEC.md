@@ -75,7 +75,7 @@ All strategies must run on **exactly the same simulated market paths** (common r
 
 ## 3. Conventions and notation (must be enforced everywhere)
 
-- **Single currency: USD.** All assets, the loan, cash, option underlyings, premiums, payoffs and reports are in USD. There is no FX risk factor, FX translation or FX hedging anywhere in the model. The config schema must **reject** any non-USD currency field with a clear error (see test 33). All amounts stored in USD as `float64`; displayed in USD m. Any CHF view for the family office is out of scope and must not be implemented implicitly.
+- **Single currency: USD.** All assets, the loan, cash, option underlyings, premiums, payoffs and reports are in USD. There is no FX risk factor, FX translation or FX hedging anywhere in the model. The config schema must **reject** any non-USD currency field with a clear error (see test 33). All amounts stored in USD as `float64`; displayed in USD m. Any non-USD view is out of scope and must not be implemented implicitly.
 - Time in **years**. Simulation step `dt` configurable: `monthly` (1/12, default), `weekly` (1/52), `daily` (1/252). Strategy events (tranche purchases, rolls, deployment checks, rebalancing) occur on **month-end** steps regardless of `dt`.
   - Document that monthly stepping **understates** intra-month drawdowns and margin-call frequency; the UI must show a warning when `dt = monthly` and recommend a daily run for margin-risk conclusions.
 - Calendar days per step for accrual = 365/steps_per_year (document this approximation).
@@ -561,7 +561,7 @@ One-click **investment-committee report** (HTML and PDF): executive summary, met
 
 ## 11. Limitations to document explicitly (`docs/LIMITATIONS.md`)
 
-Black–Scholes-with-skew is a pricing approximation, not market quotes (validate inception premiums against dealer indications); long-dated option liquidity and OTC bid/ask can be much wider in stress; counterparty and CSA terms; Lombard terms are bank-specific and LTVs can be changed at the bank's discretion; appraisal-based illiquid marks; monthly stepping understates margin risk; all-USD simplification (FX risk versus the family office's CHF reference currency deliberately ignored); tax treatment (dividend withholding, stamp duty, treatment of option gains) not modelled beyond simple costs; model risk in jump and vol dynamics; MC sampling error; no behavioural or governance constraints.
+Black–Scholes-with-skew is a pricing approximation, not market quotes (validate inception premiums against dealer indications); long-dated option liquidity and OTC bid/ask can be much wider in stress; counterparty and CSA terms; Lombard terms are bank-specific and LTVs can be changed at the bank's discretion; appraisal-based illiquid marks; monthly stepping understates margin risk; all-USD simplification (FX risk versus a non-USD reference currency deliberately ignored); tax treatment (dividend withholding, stamp duty, treatment of option gains) not modelled beyond simple costs; model risk in jump and vol dynamics; MC sampling error; no behavioural or governance constraints.
 
 ---
 

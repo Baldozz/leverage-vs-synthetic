@@ -11,3 +11,4 @@ reports/*.xml
 reports/*.csv
 .DS_Store
 ~$*.xlsx
+*.egg-info/
