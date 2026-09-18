@@ -33,7 +33,7 @@ corr = corrections_cached(0.20, s.wht, "price")
 
 st.title("Any start date since 1997")
 ends = {f"today ({last_day:%d %b %Y})": last_day, **{f"the {lab} bottom ({tr_:%d %b %Y}, SPX {lvl:,.0f})": tr_ for lab, tr_, lvl in zip(corr.index, corr["trough"], corr["trough level"], strict=True)}}
-c_years, c_end = st.columns(2)   # start years on the left, the final day on the right
+c_years, c_end, c_x = st.columns([2, 2, 1.6])   # start years, the final day, the exclusion of the rotations that stopped buying calls
 end_label = c_end.selectbox("Held until", list(ends), key="r_end", help="Every start runs to this day: today, or the bottom of a market correction to see how the portfolios looked at the worst moment.")
 end_day = ends[end_label]
 at_bottom = end_day != last_day
@@ -42,6 +42,8 @@ if at_bottom:   # every start that had completed its rotation at least a month b
 years_all = list(range(first_day.year, last_start.year + 1))
 picked = c_years.multiselect("Start years", years_all, default=[], key="r_years", placeholder="All years — or pick one or more", help="Empty = every start year.")
 sel_years = picked or years_all
+excl = c_x.checkbox("Exclude the rotations that stopped buying calls", key="r_excl", help="Drops from every table below the starts whose rotation let at least one call lapse "
+                    "(both portfolios of that start). A selection on the outcome: it removes the rotation's bad cases, not the loan's.")
 st.caption(f"The same two portfolios put on at every {'trading day' if freq == 'D' else 'week'} from {first_day:%d %b %Y} to {last_start:%d %b %Y} and held to {end_day:%d %b %Y}. "
            + ("The last start is the one whose rotation was complete a month before the bottom. " if at_bottom else f"The last start is the one whose last weekly tranche, struck on {last_strike:%d %b %Y}, still expires inside the data. ")
            + f"The rotation: {s.tenor:g}-year ATM calls on SPXFP, {s.build} weekly step{'s' if s.build > 1 else ''}, the loan gone after the build; a call that expires in the money is replaced, "
@@ -66,6 +68,8 @@ st.subheader(f"Every start date's path to {'today' if not at_bottom else end_lab
 step = 5 if freq == "D" else 1   # with daily starts draw every fifth (≈ weekly); the distributions further down still use every start
 cols = rs.index[::step]
 cols = cols[[d.year in sel_years for d in cols]]
+if excl:   # the rotations that stopped buying calls leave the fans too, in both portfolios (same start dates)
+    cols = cols[~some_lapsed.loc[cols].to_numpy()]
 LIGHT_ORANGE = "#f0b46e"
 
 
@@ -150,17 +154,33 @@ st.caption(f"One line per start date ({len(cols):,} lines{', every fifth trading
 
 # ---------------- statistics of the final NAV over the selected starts (every start of the selected years, not subsampled)
 sel_all = rs.index[[d.year in sel_years for d in rs.index]]
+if excl:
+    sel_all = sel_all[~some_lapsed.loc[sel_all].to_numpy()]
 nav0 = (s.equity - s.loan) / M
 fin = pd.DataFrame({A: rs.loc[sel_all, "NAV A end"] / M, B: rs.loc[sel_all, "NAV B end"] / M})
 D = f"Δ {B} − {A}"
-LABEL = " "   # the first column: section names and the statistic of each row
+LABEL = " "   # the first column: section names and the label of each row
 PCT = (("5th percentile", 0.05), ("25th percentile", 0.25), ("median", 0.5), ("75th percentile", 0.75), ("95th percentile", 0.95))
 SECTION_STYLE = "background-color: #dfe6f0; color: #1a1a1a; font-weight: 600"
+st.markdown("""<style>
+div[data-testid="stTable"] table { font-size: 0.95rem; table-layout: fixed; width: 100%; }
+div[data-testid="stTable"] th, div[data-testid="stTable"] td { white-space: normal !important; overflow-wrap: anywhere; padding: 0.35rem 0.6rem; vertical-align: top; line-height: 1.3; }
+div[data-testid="stTable"] th:nth-child(1), div[data-testid="stTable"] td:nth-child(1) { width: 23%; font-weight: 500; }
+div[data-testid="stTable"] th:nth-child(2), div[data-testid="stTable"] td:nth-child(2) { width: 32%; }
+div[data-testid="stTable"] th:nth-child(3), div[data-testid="stTable"] td:nth-child(3) { width: 32%; }
+div[data-testid="stTable"] th:nth-child(4), div[data-testid="stTable"] td:nth-child(4) { width: 13%; text-align: right; }
+</style>""", unsafe_allow_html=True)
 
 
-def block(title: str, a: pd.Series, b: pd.Series, suffix: Callable[[float], str] = lambda _v: "", mean: bool = False) -> list[list[str]]:
+def pm(x: float) -> str:
+    """Signed USD m, '-0' avoided."""
+    return f"{round(float(x)) + 0.0:+,.0f} m"
+
+
+def block(title: str, a: pd.Series, b: pd.Series, suffix: Callable[[float], str] = lambda _v: "", mean: bool = False,
+          cell: Callable[[float], str] = lambda x: f"{x:,.0f} m", delta: Callable[[float], str] = pm) -> list[list[str]]:
     """Rows [label, Keep, Rotate, Δ] of one section: a section row with the title, then lowest, the five percentiles, highest (and the mean) of each
-    portfolio's own distribution over the starts (a, b in USD m, one value per start), with Δ = the Rotate cell − the Keep cell of the row; last, the
+    portfolio's own distribution over the starts (a, b one value per start), with Δ = the Rotate cell − the Keep cell of the row; last, the
     count of starts on which the rotation is ahead (b > a on the same start)."""
     stats = [("lowest", a.min(), b.min()), *((n, a.quantile(q), b.quantile(q)) for n, q in PCT), ("highest", a.max(), b.max())]
     if mean:
@@ -168,41 +188,44 @@ def block(title: str, a: pd.Series, b: pd.Series, suffix: Callable[[float], str]
     rows = [[title, "", "", ""]]
     for name, fa, fb in stats:
         sfx = suffix if name in ("lowest", "highest") else (lambda _v: "")
-        rows.append([name, f"{fa:,.0f} m{sfx(float(fa))}", f"{fb:,.0f} m{sfx(float(fb))}", f"{round(float(fb - fa)) + 0.0:+,.0f} m"])
+        rows.append([name, f"{cell(float(fa))}{sfx(float(fa))}", f"{cell(float(fb))}{sfx(float(fb))}", delta(float(fb - fa))])
     rows.append(["rotation ahead on", "", "", f"{int((b > a).sum()):,} of {len(a):,} starts"])
     return rows
 
 
 def show(rows: list[list[str]]) -> pd.DataFrame:
-    """The rows as one table, the section rows (title only) shaded."""
+    """The rows as one table (text wraps, no inner scrolling), the section rows (title only) shaded."""
     df = pd.DataFrame(rows, columns=[LABEL, A, B, D])
     heads = {i for i, r in enumerate(rows) if r[1] == "" and r[2] == "" and r[3] == ""}
     sty = df.style.apply(lambda col: [SECTION_STYLE if i in heads else "" for i in range(len(col))], axis=0)
-    st.dataframe(sty, width="stretch", hide_index=True, height=table_height(len(df)),
-                 column_config={LABEL: st.column_config.Column(width="medium"), A: st.column_config.Column(width="large"), B: st.column_config.Column(width="large"), D: st.column_config.Column(width="small")})
+    st.table(sty, hide_index=True, border="horizontal")
     return df
 
 
-st.subheader(f"Final NAV on {end_day:%d %b %Y}: statistics over the {len(sel_all):,} selected starts")
-show(block("Final NAV", fin[A], fin[B], mean=True))
+st.subheader(f"On {end_day:%d %b %Y}: the {len(sel_all):,} selected starts" + (" — rotations that stopped buying calls excluded" if excl else ""))
+ann_sel = ann.loc[sel_all]
+show(block("Annualised return to the end day", ann_sel[A], ann_sel[B], cell=lambda x: f"{x:+.1%}", delta=lambda d: f"{d * 100:+.1f} pp"))
 ratio = fin[B] / fin[A] - 1.0
-st.markdown(f"- USD m, from {nav0:,.0f} m at the start. Worst start: {fin[A].idxmin():%d %b %Y} ({A}), {fin[B].idxmin():%d %b %Y} ({B}); best start: {fin[A].idxmax():%d %b %Y} ({A}), {fin[B].idxmax():%d %b %Y} ({B}).\n"
+n_excl = int(some_lapsed.loc[rs.index[[d.year in sel_years for d in rs.index]]].sum())
+note = (f"- The {n_excl:,} starts whose rotation let a call lapse are excluded (both portfolios): a selection on the outcome, which removes the rotation's bad cases but none of the loan's.\n"
+        if excl else "")
+st.markdown(f"- Annualised return = (NAV on the end day ÷ {nav0:,.0f} m)^(1 / years held) − 1, comparable across starts whatever their holding period. "
+            f"Keep and Rotate: each portfolio's own distribution over the starts; Δ = Rotate − Keep on each row (lowest vs lowest, median vs median — usually different start dates); "
+            f"'rotation ahead on' compares each start with itself.\n{note}"
             f"- Same start, same end: the rotation ends **ahead on {float((ratio > 0).mean()):.0%}** of the selected starts; its final NAV relative to keeping the loan: median **{ratio.median():+.1%}**, "
             f"5th–95th percentile {ratio.quantile(0.05):+.1%} to {ratio.quantile(0.95):+.1%}, worst {ratio.min():+.1%} ({ratio.idxmin():%d %b %Y} start), best {ratio.max():+.1%} ({ratio.idxmax():%d %b %Y} start).\n"
-            f"- Keep and Rotate: each portfolio's own distribution over the starts; Δ = Rotate − Keep on each row (e.g. lowest vs lowest, median vs median — the two cells "
-            f"are usually different start dates). 'Rotation ahead on' compares each start with itself.")
+            f"- Consecutive starts overlap almost entirely: the percentiles are the range of history, not probabilities.")
 
-# ---------------- the market bottoms and the ten worst trajectories
-st.subheader("At each market bottom: NAV and dry powder of the starts running that day, and the worst trajectory in detail")
+# ---------------- the market bottoms: one tab per bottom
+st.subheader("At each market bottom")
 bottoms = pd.DataFrame({
     "Correction": corr.index, "Previous peak": [d.date() for d in corr["peak"]], "SPX at the peak": corr["peak level"].to_numpy(),
     "Bottom": [d.date() for d in corr["trough"]], "SPX at the bottom": corr["trough level"].to_numpy(), "Fall": corr["drawdown"].to_numpy(),
     "Back to the peak": [d.date() if pd.notna(d) else "not yet" for d in corr["recovered"]],
 })
 st.dataframe(bottoms.style.format("{:,.0f}", subset=["SPX at the peak", "SPX at the bottom"]).format("{:+.0%}", subset=["Fall"]), width="stretch", hide_index=True, height=table_height(len(bottoms)))
-st.caption("Falls of 20 % or more in the SPX price index since 1997: the day of the previous peak, the lowest close, and the day the index regained the peak. The bottoms are the dashed lines on the charts above.")
-
-st.markdown("**At each bottom** — the NAV of the selected starts running that day; the worst trajectory (the lowest NAV that day in either portfolio) with both strategies on that start, in detail, with what each had cost to get there; the dry powder of the starts running that day.")
+st.caption("Falls of 20 % or more in the SPX price index since 1997: the day of the previous peak, the lowest close, and the day the index regained the peak. The bottoms are the dashed lines on the charts above. "
+           "One tab per bottom below: the worst trajectory in detail (the lowest NAV that day in either portfolio, both strategies on that start) and the dry powder of the selected starts running that day.")
 spx_px = lvs._load(str(lvs.DAILY_FILE)).set_index("date")["spx_px_last"]
 
 
@@ -215,18 +238,13 @@ def vs_peak(start: pd.Timestamp, r: object) -> str:
     return f"{when}, SPX {px:,.0f} ({px / level - 1:+.1%} vs the peak)"
 
 
-def pm(x: float) -> str:
-    """Signed USD m, '-0' avoided."""
-    return f"{round(float(x)) + 0.0:+,.0f} m"
-
-
-n_wb = 0
-for lab, r in zip(corr.index, corr.itertuples(), strict=True):
-    if r.trough > end_day or r.trough not in paths["nav_A"].index:
-        continue
-    alive = [c for c in sel_all if c in paths["nav_A"].columns and pd.notna(paths["nav_A"].loc[r.trough, c])]
-    if not alive:
-        continue
+shown = [(lab, r, [c for c in sel_all if c in paths["nav_A"].columns and pd.notna(paths["nav_A"].loc[r.trough, c])])
+         for lab, r in zip(corr.index, corr.itertuples(), strict=True) if r.trough <= end_day and r.trough in paths["nav_A"].index]
+shown = [(lab, r, alive) for lab, r, alive in shown if alive]
+if not shown:
+    st.markdown("No market bottom falls inside the selected runs.")
+for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d %b %Y}" for lab, r, _ in shown]) if shown else [], strict=True):
+  with tab:
     na, nb = paths["nav_A"].loc[r.trough, alive], paths["nav_B"].loc[r.trough, alive]
     wa, wb = na.idxmin(), nb.idxmin()
     st.markdown(f"**{lab} bottom — {r.trough:%d %b %Y}**, SPX {corr.loc[lab, 'trough level']:,.0f}, {r.drawdown:+.0%} from the {r.peak:%d %b %Y} peak; {len(alive):,} starts running that day")
@@ -251,17 +269,22 @@ for lab, r in zip(corr.index, corr.itertuples(), strict=True):
          f"{lv_b:,.0f} − {v('loan_B', w):,.0f} + {v('cash_B', w):,.0f} = {v('dry_powder_B', w):,.0f} m", pm(v("dry_powder_B", w) - v("headroom_A", w))],
         ["cost since the start", f"interest {v('interest_cum_A', w):,.0f} m", f"premiums {v('premiums_cum_B', w):,.0f} m − payoffs {v('payoffs_cum_B', w):,.0f} m = {net:,.0f} m", pm(net - v("interest_cum_A", w))],
     ]
-    show(block("NAV", na / M, nb / M, lambda val: f" ({val / nav0 - 1:+.0%} from the start)") + worst + block("Dry powder", room_all, dp_all))
-    n_wb += 1
-if n_wb == 0:
-    st.markdown("No market bottom falls inside the selected runs.")
+    # dry powder, same start: the starts are picked on the NAV distribution of the portfolio with the lowest NAV that day (usually Keep) — its lowest, the five percentiles, its highest —
+    # and both strategies' dry powder on each of those starts, Δ like for like
+    base, base_who = (na, A) if na.min() <= nb.min() else (nb, B)
+    picks = [("lowest", base.idxmin()), *((n, (base - base.quantile(q)).abs().idxmin()) for n, q in PCT), ("highest", base.idxmax())]
+    powder = [[f"Dry powder, same start, at the NAV percentiles of {base_who}", "", "", ""]]
+    for name, st_ in picks:
+        powder.append([f"at the {name} NAV: {base[st_] / M:,.0f} m ({st_:%d %b %Y} start)", f"{room_all[st_]:,.0f} m", f"{dp_all[st_]:,.0f} m", pm(dp_all[st_] - room_all[st_])])
+    powder.append(["rotation ahead on", "", "", f"{int((dp_all > room_all).sum()):,} of {len(alive):,} starts"])
+    show(worst + powder)
+    st.caption(f"Market values on the bottom day, from the daily simulation of each trajectory. LTV = loan ÷ ({s.lv_equity:.0%} × SPX); the margin call comes when the SPX falls by a further 1 − LTV. "
+               f"Dry powder = the lending value of what is held − loan + cash: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (sidebar, Advanced); the calls are at market value, not notional. "
+               f"Dry powder: the starts running that day are ranked by the NAV of {base_who} (the portfolio with the lowest NAV that day); at its lowest, 5th / 25th / 50th / 75th / 95th percentile and highest NAV, "
+               "the row gives that start and both strategies' dry powder on it, so every Δ is the same start; 'rotation ahead on' counts the starts (of all those running that day) where the rotation has more dry powder. "
+               "Worst trajectory: the start with the lowest NAV that day in either portfolio, and both strategies on that same start — its balance sheet and what it had cost since the start "
+               "(Keep: the interest capitalised on the loan; Rotate: the premiums paid for every call bought less the payoffs received at expiry; a positive cost Δ = the rotation had cost more).")
 
-st.caption(f"Market values on the bottom day, from the daily simulation of each trajectory. LTV = loan ÷ ({s.lv_equity:.0%} × SPX); the margin call comes when the SPX falls by a further 1 − LTV. "
-           f"Dry powder = the lending value of what is held − loan + cash: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (sidebar, Advanced); the calls are at market value, not notional. "
-           "NAV and Dry powder: Keep and Rotate are each portfolio's own distribution over the starts running that day; Δ = Rotate − Keep on each row "
-           "(lowest vs lowest, median vs median, … — the two cells are usually different start dates); 'rotation ahead on' compares each start with itself and counts those where the rotation is ahead. "
-           "Worst trajectory: the start with the lowest NAV that day in either portfolio, and both strategies on that same start — its balance sheet and what it had cost since the start "
-           "(Keep: the interest capitalised on the loan; Rotate: the premiums paid for every call bought less the payoffs received at expiry; a positive cost Δ = the rotation had cost more).")
 low = pd.DataFrame({A: rs.loc[sel_all, "A: min headroom"] / M, B: rs.loc[sel_all, "B: min dry powder"] / M})
 st.markdown(f"- Margin calls keeping the loan: **{int(rs.loc[sel_all, 'A: margin call'].sum()):,}** of the {len(sel_all):,} selected starts; the closest was {low[A].min():,.0f} m of room "
             f"({rs.loc[sel_all, 'A: min headroom'].idxmin():%d %b %Y} start, on {rs.loc[rs.loc[sel_all, 'A: min headroom'].idxmin(), 'A: min headroom date']:%d %b %Y}). "

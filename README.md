@@ -14,14 +14,14 @@ the start-date grid):
    9 Sep 1997 to the last start whose calls have expired, each held to the day chosen in *Held until* — today, or one of
    the market bottoms (Oct 2002, Mar 2009, Mar 2020, Oct 2022). The page shows: the fan of every trajectory (one colour
    per start year, light to strong, the rotations that stopped buying calls after a correction in yellow to orange) with
-   the distribution of the final NAV drawn vertically on the right edge; the statistics of the final NAV over the selected
-   start years (lowest, percentiles, highest, mean; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead); a zoom slider for the fans; the corrections of 20 % or more in the SPX
-   price index (peak, bottom, recovery); one table per market bottom (sections NAV, Worst trajectory, Dry powder, shaded section rows), Keep the loan vs Rotate into calls with the delta —
-   the NAV that day (lowest, 5th / 25th / 50th / 75th / 95th percentile, highest), the worst trajectory in detail — the start with the lowest NAV that day in either portfolio, both strategies read on that same start with a Δ on every row (when it
+   the distribution of the final NAV drawn vertically on the right edge, with a zoom slider; on the end day, the distribution of the annualised return over the selected starts
+   (lowest, percentiles, highest; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead on the same start; a checkbox excludes the
+   rotations that stopped buying calls from every table); the corrections of 20 % or more in the SPX
+   price index (peak, bottom, recovery); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —
+   the worst trajectory in detail — the start with the lowest NAV that day in either portfolio, both strategies read on that same start with a Δ on every row (when it
    started and how far from the peak, NAV, SPX, calls at market value with the number alive, cash, loan, lending value, dry
-   powder as lending value − loan + cash, LTV and the further fall to a margin call, the cost since the start: interest paid vs premiums paid less payoffs received) and the dry powder that day (same
-   points of its distribution; Δ = Rotate − Keep on each row, with the number of starts on which the
-   rotation is ahead); the final value by start date; a CSV download of every start's results. Engine
+   powder as lending value − loan + cash, LTV and the further fall to a margin call, the cost since the start: interest paid vs premiums paid less payoffs received) and the dry powder, same start: the starts at the lowest, 5th / 25th / 50th / 75th / 95th percentile and highest NAV of the portfolio with the lowest NAV that day
+   (usually Keep the loan), both strategies' dry powder on each of them with the Δ, and the number of starts on which the rotation has more; the final value by start date; a CSV download of every start's results. Engine
    `src/fosim/analytics/leverage_stress.py` (`simulate` with the daily accounting identity asserted, `rolling_starts`,
    `rolling_paths` with the bottoms sampled exactly, `corrections`, `starts_table`, `paths_table`), tests
    `tests/test_leverage_stress.py` and `tests/test_app.py` (which cross-checks the bottom tables against direct
