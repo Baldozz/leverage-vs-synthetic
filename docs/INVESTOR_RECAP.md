@@ -147,4 +147,4 @@ A full daily record of every start date (NAV, dry powder, balance sheet) can be 
    percentiles show the range of past outcomes. They are not probabilities.
 6. **Not modelled:** taxes beyond dividend withholding, currency risk (everything is in USD), and any use of the
    loan proceeds outside the two portfolios.
-7. **Data still pending:** a 7-year Treasury series (currently interpolated) and dealer vol marks (see point 1).
+7. **Data still pending:** dealer vol marks (see point 1). The 7-year Treasury is observed from 2009 and interpolated between the 5- and 10-year yields before that.

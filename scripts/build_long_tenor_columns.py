@@ -1,15 +1,15 @@
 """Add 7- and 10-year Treasury yields and extrapolated 7y/10y ATM implied vols to data/market_data_{daily,weekly,monthly}.csv.
 
 Yields: Bloomberg ``USGG10YR Index`` / ``USGG7YR Index`` (``PX_LAST``, daily) exported as one workbook per ticker
-(sheet ``Values``: row 0 = "Security", row 5 = header, data from row 6, Excel serial dates, descending).
-Where the 7-year series is missing (Bloomberg's ``USGG7YR`` history starts in 2009) the 7-year yield is
+(``10yr for calls analysis.xlsx`` and ``7Y UST.xlsx``; see ``read_bbg_series`` for the two layouts recognised).
+Before the first date of the 7-year series (Bloomberg's ``USGG7YR`` history starts on 2009-02-26) the 7-year yield is
 interpolated linearly in maturity between the 5- and 10-year yields and flagged in ``ust_7y_interpolated``
 (Assumptions 19n). Vols: same construction as ``iv_5y`` (Assumptions 19l) —
 ``iv_T = theta_T * (iv_24m_filled / theta_24m) ** (beta_T / beta_24m)`` with beta_T from the log-linear fit of the
 observed tenor elasticities to VIX (3m … 24m, full history) and theta_T = theta_5y (flat mean level beyond 5 years,
 PLACEHOLDER until a dealer / OVDV anchor is available). Fit parameters are written to data/vol_mapping_fit.json.
 
-Run:  .venv/bin/python scripts/build_long_tenor_columns.py [--ust10 FILE] [--ust7 FILE]
+Run:  .venv/bin/python scripts/build_long_tenor_columns.py [--ust10 FILE] [--ust7 FILE]   (defaults: the two workbooks in the project root)
 """
 
 from __future__ import annotations
@@ -30,15 +30,27 @@ JOIN_TOLERANCE = pd.Timedelta(31, unit="D")  # daily gaps are ≤ 5 days; the la
 
 
 def read_bbg_series(path: Path, ticker: str, field: str = "PX_LAST") -> pd.Series:
-    """One Bloomberg BDH export (sheet ``Values``) → daily Series indexed by date, ascending."""
-    raw = pd.read_excel(path, sheet_name="Values", header=None)
-    if str(raw.iat[0, 1]).strip() != ticker:
-        raise ValueError(f"{path.name}: expected {ticker} in B1, found {raw.iat[0, 1]!r}")
-    hdr = raw.iloc[5].tolist()
-    if hdr[0] != "Date" or field not in hdr:
-        raise ValueError(f"{path.name}: unexpected header row {hdr}")
-    body = raw.iloc[6:, [0, hdr.index(field)]].dropna()
-    dates = pd.to_datetime(pd.to_numeric(body.iloc[:, 0]), unit="D", origin="1899-12-30")
+    """One Bloomberg export → daily Series indexed by date, ascending. Two layouts are recognised: the BDH sheet ``Values``
+    (row 0 = "Security", row 5 = header, data from row 6, Excel serial dates) and the two-column sheet ``Sheet1``
+    (A1 = field, B1 = ticker, then date | value rows; rows without a value — the requested range bounds — are dropped)."""
+    sheets = pd.read_excel(path, sheet_name=None, header=None)
+    if "Values" in sheets:
+        raw = sheets["Values"]
+        if str(raw.iat[0, 1]).strip() != ticker:
+            raise ValueError(f"{path.name}: expected {ticker} in B1, found {raw.iat[0, 1]!r}")
+        hdr = raw.iloc[5].tolist()
+        if hdr[0] != "Date" or field not in hdr:
+            raise ValueError(f"{path.name}: unexpected header row {hdr}")
+        body = raw.iloc[6:, [0, hdr.index(field)]].dropna()
+        dates = pd.to_datetime(pd.to_numeric(body.iloc[:, 0]), unit="D", origin="1899-12-30")
+    elif "Sheet1" in sheets:
+        raw = sheets["Sheet1"]
+        if str(raw.iat[0, 0]).strip() != field or str(raw.iat[0, 1]).strip() != ticker:
+            raise ValueError(f"{path.name}: expected {field} | {ticker} in row 1, found {raw.iloc[0].tolist()!r}")
+        body = raw.iloc[1:, [0, 1]].dropna()
+        dates = pd.to_datetime(body.iloc[:, 0])
+    else:
+        raise ValueError(f"{path.name}: no sheet 'Values' or 'Sheet1' (found {list(sheets)})")
     s = pd.Series(pd.to_numeric(body.iloc[:, 1]).to_numpy(), index=dates, name=ticker).sort_index()
     return s[~s.index.duplicated(keep="last")]
 
@@ -97,6 +109,6 @@ def main(ust10: Path, ust7: Path | None) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--ust10", type=Path, default=ROOT / "10yr for calls analysis.xlsx")
-    ap.add_argument("--ust7", type=Path, default=None, help="USGG7YR export; omitted → 7y interpolated between 5y and 10y")
+    ap.add_argument("--ust7", type=Path, default=ROOT / "7Y UST.xlsx", help="USGG7YR export (daily from 2009-02-26); before its first date the 7y is interpolated between 5y and 10y")
     a = ap.parse_args()
     main(a.ust10, a.ust7)
