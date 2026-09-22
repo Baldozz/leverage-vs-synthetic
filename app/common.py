@@ -86,7 +86,7 @@ def all_starts_cached(first: str, last: str, freq: str, s: Setup, until: str) ->
         bar.progress(i / n, text=f"Simulating start {i:,} of {n:,} …")
 
     bottoms = tuple(pd.Timestamp(d) for d in lvs.corrections(0.20, wht=s.wht, on="price")["trough"])   # sampled exactly, for the worst trajectory at each bottom
-    out = lvs.rolling_paths(starts, until, columns=("headroom_A", "dry_powder_B", "nav_A", "nav_B", "ltv_A", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "call_notional", "interest_cum_A", "premiums_cum_B", "payoffs_cum_B"), sample="M", mark_days=bottoms, progress=_p,
+    out = lvs.rolling_paths(starts, until, columns=("headroom_A", "dry_powder_B", "nav_A", "nav_B", "ltv_A", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B"), sample="M", mark_days=bottoms, progress=_p,
                             equity0=s.equity, loan0=s.loan, spread=s.spread, ltv_equity=s.lv_equity, ltv_call=s.lv_calls, tenor=s.tenor, wht=s.wht,
                             surplus=s.surplus, cash_buffer=0.0, delta=None, build_tranches=s.build, replace_worthless=s.replace_worthless)
     bar.empty()

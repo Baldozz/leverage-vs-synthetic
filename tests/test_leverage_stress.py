@@ -146,6 +146,7 @@ def test_rolling_start_row_equals_single_path(tmp_path: Path) -> None:
     assert row["A return"] == pytest.approx(p["nav_A"].iloc[-1] / p["nav_A"].iloc[0] - 1) and row["B return"] == pytest.approx(p["nav_B"].iloc[-1] / p["nav_B"].iloc[0] - 1) and row["B: max LTV"] == 0.0
     assert row["B: min borrowing capacity"] == pytest.approx((p["cap_B"] - p["loan_B"]).min()) and row["years"] == pytest.approx((p.index[-1] - p.index[0]).days / 365.25)
     assert row["premiums paid"] == pytest.approx(info.premium0 * info.notional0 + sum(r.premium_paid for r in info.rolls)) and row["payoffs received"] == pytest.approx(sum(r.payoff for r in info.rolls))
+    assert row["interest paid A"] == pytest.approx(p["interest_A"].sum()) and row["interest paid B"] == pytest.approx(p["interest_B"].sum()) == 0.0   # one-shot rotation: the loan is gone on day 0
     assert row["end: equity B"] + row["end: calls B"] + row["end: cash B"] - row["end: loan B"] == pytest.approx(row["NAV B end"])
     seen: list[tuple[int, int]] = []
     rolling_starts(starts, 5.0, build_tranches=1, file=f, progress=lambda i, n: seen.append((i, n)))
@@ -331,11 +332,27 @@ def test_corrections_and_lowest_nav(tmp_path: Path) -> None:
 
 
 def test_cumulative_cost_columns_match_the_summary() -> None:
-    """interest_cum_A / premiums_cum_B / payoffs_cum_B are running totals that end on the sums reported per start (page 1, worst-trajectory block)."""
+    """interest_cum_A / interest_cum_B / premiums_cum_B / payoffs_cum_B are running totals that end on the sums reported per start (page 1, worst-trajectory block)."""
     p, info = simulate("2003-03-10", "2012-12-31")   # calls struck in the 2003 trough expire in the money in 2008: payoffs > 0
     assert p["interest_cum_A"].iloc[-1] == pytest.approx(p["interest_A"].sum()) and p["interest_cum_A"].iloc[0] == 0.0
+    # the rotation's loan accrues while it is being repaid: the running total is flat once the build is over, and it is real money (the equity sold pays it)
+    assert info.build_end is not None
+    assert p["interest_cum_B"].iloc[-1] == pytest.approx(p["interest_B"].sum()) and p["interest_cum_B"].iloc[0] == 0.0 and 0.0 < p["interest_cum_B"].iloc[-1] < p["interest_cum_A"].iloc[-1]
+    assert p["interest_cum_B"].iloc[-1] == pytest.approx(p.loc[: info.build_end, "interest_B"].sum()) and (p.loc[info.build_end :, "interest_B"].iloc[1:] == 0.0).all()
+    sold = sum(b.equity_sold for b in info.builds)   # over the build: SPX sold = loan repaid (250 m + its interest) + premiums
+    assert sold == pytest.approx(250e6 + p["interest_cum_B"].iloc[-1] + sum(b.premium_paid for b in info.builds))
     assert p["premiums_cum_B"].iloc[-1] == pytest.approx(sum(b.premium_paid for b in info.builds) + sum(r.premium_paid for r in info.rolls))
     assert p["premiums_cum_B"].iloc[0] == pytest.approx(info.builds[0].premium_paid)
     assert p["payoffs_cum_B"].iloc[-1] == pytest.approx(sum(r.payoff for r in info.rolls)) and p["payoffs_cum_B"].iloc[-1] > 0.0
-    for c in ("interest_cum_A", "premiums_cum_B", "payoffs_cum_B"):
+    for c in ("interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B", "n_bought"):
         assert (np.diff(p[c].to_numpy()) >= -1e-9).all()
+    # tranches bought to each day: one on the start day, the 52 build steps by the end of the build, then one per replacement at expiry
+    assert p["n_bought"].iloc[0] == 1 and p.loc[info.build_end, "n_bought"] == 52 == len(info.builds) and p["n_bought"].iloc[-1] == 52 + sum(1 for r in info.rolls if r.premium_paid > 0.0)
+    assert (p["n_calls"] <= p["n_bought"]).all() and p.loc[: info.build_end, "n_calls"].equals(p.loc[: info.build_end, "n_bought"])
+    # the cash of the rotation is the payoffs of the calls that expired in the money, less the premiums of their replacements, plus T-bill interest;
+    # it counts at 100 % in the dry powder (SPX at 75 %, the calls at 0 %) and in the NAV
+    first_itm = next(r.date for r in info.rolls if r.payoff > 0.0)
+    assert (p.loc[: first_itm, "cash_B"].iloc[:-1] == 0.0).all() and p.loc[first_itm, "cash_B"] > 0.0 and (p.loc[first_itm:, "cash_B"] > 0.0).all()
+    assert p["cash_B"].iloc[-1] == pytest.approx(sum(r.payoff - r.premium_paid + r.equity_sold for r in info.rolls) + p["cash_int_B"].sum())
+    assert np.allclose(p["dry_powder_B"], 0.75 * p["E_B"] + 0.0 * p["call_val"] - p["loan_B"] + p["cash_B"]) and (p["dry_powder_B"] - 0.75 * p["E_B"]).iloc[-1] == pytest.approx(p["cash_B"].iloc[-1])
+    assert np.allclose(p["nav_B"], p["E_B"] + p["call_val"] + p["cash_B"] - p["loan_B"])

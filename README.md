@@ -20,8 +20,7 @@ the start-date grid):
    price index (peak, bottom, recovery); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —
    the worst trajectory in detail — the start with the lowest NAV that day in either portfolio, both strategies read on that same start with a Δ on every row (when it
    started and how far from the peak, NAV, SPX, calls at market value with the number alive, cash, loan, lending value, dry
-   powder as lending value − loan + cash, LTV and the further fall to a margin call, the cost since the start: interest paid vs premiums paid less payoffs received) and the dry powder, same start: the starts at the lowest, 5th / 25th / 50th / 75th / 95th percentile and highest NAV of the portfolio with the lowest NAV that day
-   (usually Keep the loan), both strategies' dry powder on each of them with the Δ, and the number of starts on which the rotation has more; the final value by start date; a CSV download of every start's results. Engine
+   powder as lending value − loan + cash, LTV and the further fall to a margin call, the cost since the start on two rows: the interest paid on each loan, and the premiums paid less the payoffs received) and the number of starts on which the rotation has more dry powder that day; the final value by start date; a CSV download of every start's results. Engine
    `src/fosim/analytics/leverage_stress.py` (`simulate` with the daily accounting identity asserted, `rolling_starts`,
    `rolling_paths` with the bottoms sampled exactly, `corrections`, `starts_table`, `paths_table`), tests
    `tests/test_leverage_stress.py` and `tests/test_app.py` (which cross-checks the bottom tables against direct

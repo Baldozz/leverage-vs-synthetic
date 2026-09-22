@@ -200,6 +200,7 @@ def simulate(
     prem_day, pay_day = np.zeros(n), np.zeros(n)   # premiums paid / payoffs received on the day (build, rolls)
     is_roll = np.zeros(n, dtype=bool)
     n_calls = np.zeros(n, dtype=np.int64)          # tranches alive at the end of each day
+    bought_day = np.zeros(n, dtype=np.int64)       # tranches bought on the day (build steps and replacements at expiry)
     rolls: list[Roll] = []
     builds: list[Roll] = []
     tot_sold = tot_notional = tot_premium = 0.0
@@ -208,6 +209,7 @@ def simulate(
         e_date, k_e = expiry_of(k)
         t = Tranche(notional / S[k], S[k], e_date, k_e, d_k)
         live.setdefault(k_e, []).append(t)
+        bought_day[k] += 1
         mark_segment(t, k)
         return t
 
@@ -311,7 +313,8 @@ def simulate(
         "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
         "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr + cash_B, "nav_B": nav_B,
         "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
-        "interest_cum_A": np.cumsum(interest), "premiums_cum_B": np.cumsum(prem_day), "payoffs_cum_B": np.cumsum(pay_day),   # costs since the start, to each day
+        "n_bought": np.cumsum(bought_day),   # tranches bought to each day: the build steps done so far, plus every replacement at expiry
+        "interest_cum_A": np.cumsum(interest), "interest_cum_B": np.cumsum(interest_B), "premiums_cum_B": np.cumsum(prem_day), "payoffs_cum_B": np.cumsum(pay_day),   # costs since the start, to each day
     }, index=pd.DatetimeIndex(d.date, name="date"))
     info = StressInfo(start=pd.Timestamp(dates[0]), end=pd.Timestamp(dates[-1]), premium0=tot_premium / tot_notional, rotation=tot_sold, delta0=tot_sold / tot_notional, notional0=tot_notional,
                       units0=sum(b.premium_paid / b.premium_frac for b in builds) / S[0], loan_base0=float(base[0]), rate_col=rate_col, vol_col=vol_col, tenor=float(tenor),
@@ -358,7 +361,7 @@ def _start_row(p: pd.DataFrame, info: StressInfo) -> dict[str, object]:
         "A: max LTV": float(p["ltv_A"].max()), "A: min headroom": float(p["headroom_A"].iloc[m]), "A: min headroom date": p.index[m], "A: margin call": bool(p["headroom_A"].iloc[m] < 0.0),
         "B: min dry powder": float(p["dry_powder_B"].iloc[b]), "B: min dry powder date": p.index[b],
         "trough": p.index[t], "drawdown at trough": float(p["drawdown"].iloc[t]), "B: capacity at trough": float(p["cap_B"].iloc[t]), "B: dry powder at trough": float(p["dry_powder_B"].iloc[t]), "A: headroom at trough": float(p["headroom_A"].iloc[t]),
-        "A: LTV at trough": float(p["ltv_A"].iloc[t]), "interest paid A": float(p["interest_A"].sum()),
+        "A: LTV at trough": float(p["ltv_A"].iloc[t]), "interest paid A": float(p["interest_A"].sum()), "interest paid B": float(p["interest_B"].sum()),
         "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
         "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
         "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
@@ -455,7 +458,8 @@ def starts_table(rs: pd.DataFrame) -> pd.DataFrame:
         "keep the loan: lowest dry powder (m)": (rs["A: min headroom"] / m).round(1), "keep the loan: lowest dry powder on": pd.DatetimeIndex(rs["A: min headroom date"]).date,
         "rotate into calls: lowest dry powder (m)": (rs["B: min dry powder"] / m).round(1), "rotate into calls: lowest dry powder on": pd.DatetimeIndex(rs["B: min dry powder date"]).date,
         "keep the loan: dry powder today (m)": (rs["A: headroom end"] / m).round(1), "rotate into calls: dry powder today (m)": (rs["B: dry powder end"] / m).round(1),
-        "keep the loan: interest paid (m)": (rs["interest paid A"] / m).round(1), "rotate into calls: premiums paid (m)": (rs["premiums paid"] / m).round(1),
+        "keep the loan: interest paid (m)": (rs["interest paid A"] / m).round(1), "rotate into calls: interest paid during the build (m)": (rs["interest paid B"] / m).round(1),
+        "rotate into calls: premiums paid (m)": (rs["premiums paid"] / m).round(1),
         "rotate into calls: payoffs received (m)": (rs["payoffs received"] / m).round(1), "rotate into calls: SPX sold at rolls (m)": (rs["equity sold at rolls"] / m).round(1),
         "calls expired": rs["rolls"], "calls expired worthless": rs["B: lapsed"], "all calls gone on": [d.isoformat() if pd.notna(d) else "" for d in pd.DatetimeIndex(rs["B: calls lost on"]).date],
         "keep the loan today: SPX (m)": (rs["end: equity A"] / m).round(1), "keep the loan today: loan (m)": (rs["end: loan A"] / m).round(1),

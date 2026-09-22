@@ -218,14 +218,23 @@ st.markdown(f"- Annualised return = (NAV on the end day ÷ {nav0:,.0f} m)^(1 / y
 
 # ---------------- the market bottoms: one tab per bottom
 st.subheader("At each market bottom")
+shown = [(lab, r, [c for c in sel_all if c in paths["nav_A"].columns and pd.notna(paths["nav_A"].loc[r.trough, c])])
+         for lab, r in zip(corr.index, corr.itertuples(), strict=True) if r.trough <= end_day and r.trough in paths["nav_A"].index]
+shown = [(lab, r, alive) for lab, r, alive in shown if alive]
+alive_at = {lab: alive for lab, _, alive in shown}
+lowest = {k: [paths[k].loc[corr.loc[lab, "trough"], alive_at[lab]].min() / M if lab in alive_at else np.nan for lab in corr.index] for k in ("nav_A", "nav_B")}
 bottoms = pd.DataFrame({
     "Correction": corr.index, "Previous peak": [d.date() for d in corr["peak"]], "SPX at the peak": corr["peak level"].to_numpy(),
     "Bottom": [d.date() for d in corr["trough"]], "SPX at the bottom": corr["trough level"].to_numpy(), "Fall": corr["drawdown"].to_numpy(),
     "Back to the peak": [d.date() if pd.notna(d) else "not yet" for d in corr["recovered"]],
+    f"Lowest NAV, {A}": lowest["nav_A"], f"Lowest NAV, {B}": lowest["nav_B"],
 })
-st.dataframe(bottoms.style.format("{:,.0f}", subset=["SPX at the peak", "SPX at the bottom"]).format("{:+.0%}", subset=["Fall"]), width="stretch", hide_index=True, height=table_height(len(bottoms)))
+st.dataframe(bottoms.style.format("{:,.0f}", subset=["SPX at the peak", "SPX at the bottom"]).format("{:+.0%}", subset=["Fall"]).format("{:,.0f} m", subset=[f"Lowest NAV, {A}", f"Lowest NAV, {B}"], na_rep="—"),
+             width="stretch", hide_index=True, height=table_height(len(bottoms)))
 st.caption("Falls of 20 % or more in the SPX price index since 1997: the day of the previous peak, the lowest close, and the day the index regained the peak. The bottoms are the dashed lines on the charts above. "
-           "One tab per bottom below: the worst trajectory in detail (the lowest NAV that day in either portfolio, both strategies on that start) and the dry powder of the selected starts running that day.")
+           "Lowest NAV: on the bottom day, the lowest NAV of each portfolio over the selected starts running that day (usually different start dates); — when no selected start was running. "
+           "One tab per bottom below: the worst trajectory in detail (the lowest NAV that day in either portfolio, both strategies read on that same start) and the count of starts on which "
+           "the rotation has more dry powder that day.")
 spx_px = lvs._load(str(lvs.DAILY_FILE)).set_index("date")["spx_px_last"]
 
 
@@ -238,9 +247,30 @@ def vs_peak(start: pd.Timestamp, r: object) -> str:
     return f"{when}, SPX {px:,.0f} ({px / level - 1:+.1%} vs the peak)"
 
 
-shown = [(lab, r, [c for c in sel_all if c in paths["nav_A"].columns and pd.notna(paths["nav_A"].loc[r.trough, c])])
-         for lab, r in zip(corr.index, corr.itertuples(), strict=True) if r.trough <= end_day and r.trough in paths["nav_A"].index]
-shown = [(lab, r, alive) for lab, r, alive in shown if alive]
+def trajectory(w: pd.Timestamp, title: str, same_start: str, at_: dict[str, pd.Series], r: object) -> list[list[str]]:
+    """One start read on both strategies on the bottom day (``at_``: the path columns on that day, over the starts): a section row, then its
+    balance sheet and costs since the start, Δ on every row."""
+    v = lambda k: float(at_[k][w]) / M  # noqa: E731
+    lv_a, lv_b = s.lv_equity * v("E_A"), s.lv_equity * v("E_B") + s.lv_calls * v("call_val")
+    n_bought = int(at_["n_bought"][w])   # the build steps done by that day plus every replacement at expiry — fewer than the weekly steps when the bottom came before the rotation was complete
+    n_alive = f"{int(at_['n_calls'][w])} call{'s' if at_['n_calls'][w] != 1 else ''} alive of the {n_bought} bought" + (f" so far: {n_bought} of the {s.build} weekly steps done" if n_bought < s.build else "")
+    net = v("premiums_cum_B") - v("payoffs_cum_B")
+    return [
+        [title, "", "", ""],
+        ["started on", f"{w:%d %b %Y}, {vs_peak(w, r)}", same_start, ""],
+        ["NAV", f"{v('nav_A'):,.0f} m ({v('nav_A') / nav0 - 1:+.0%} from the start)", f"{v('nav_B'):,.0f} m ({v('nav_B') / nav0 - 1:+.0%} from the start)", pm(v("nav_B") - v("nav_A"))],
+        ["SPX held, market value", f"{v('E_A'):,.0f} m", f"{v('E_B'):,.0f} m", pm(v("E_B") - v("E_A"))],
+        ["calls held, market value", "—", f"{v('call_val'):,.0f} m ({n_alive}, on a notional of {v('call_notional'):,.0f} m of index)", pm(v("call_val"))],
+        ["cash", "—", f"{v('cash_B'):,.0f} m", pm(v("cash_B"))],
+        ["loan", f"{v('loan'):,.0f} m", f"{v('loan_B'):,.0f} m" + (" (rotation still under way)" if at_["loan_B"][w] > 0.5e6 else ""), pm(v("loan_B") - v("loan"))],
+        ["lending value of the holdings", f"{lv_a:,.0f} m ({s.lv_equity:.0%} of the SPX)", f"{lv_b:,.0f} m ({s.lv_equity:.0%} of the SPX + {s.lv_calls:.0%} of the calls)", pm(lv_b - lv_a)],
+        ["dry powder = lending value − loan + cash", f"{lv_a:,.0f} − {v('loan'):,.0f} = {v('headroom_A'):,.0f} m (LTV {at_['ltv_A'][w]:.0%}: a further {max(1 - at_['ltv_A'][w], 0):.0%} SPX fall to a margin call)",
+         f"{lv_b:,.0f} − {v('loan_B'):,.0f} + {v('cash_B'):,.0f} = {v('dry_powder_B'):,.0f} m", pm(v("dry_powder_B") - v("headroom_A"))],
+        ["interest paid since the start", f"{v('interest_cum_A'):,.0f} m", f"{v('interest_cum_B'):,.0f} m (during the build)", pm(v("interest_cum_B") - v("interest_cum_A"))],
+        ["premiums paid − payoffs received since the start", "—", f"{v('premiums_cum_B'):,.0f} m − {v('payoffs_cum_B'):,.0f} m = {net:,.0f} m", pm(net)],
+    ]
+
+
 if not shown:
     st.markdown("No market bottom falls inside the selected runs.")
 for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d %b %Y}" for lab, r, _ in shown]) if shown else [], strict=True):
@@ -248,42 +278,19 @@ for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d 
     na, nb = paths["nav_A"].loc[r.trough, alive], paths["nav_B"].loc[r.trough, alive]
     wa, wb = na.idxmin(), nb.idxmin()
     st.markdown(f"**{lab} bottom — {r.trough:%d %b %Y}**, SPX {corr.loc[lab, 'trough level']:,.0f}, {r.drawdown:+.0%} from the {r.peak:%d %b %Y} peak; {len(alive):,} starts running that day")
-    at_ = {k: paths[k].loc[r.trough] for k in ("E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "call_notional", "headroom_A", "dry_powder_B", "ltv_A", "interest_cum_A", "premiums_cum_B", "payoffs_cum_B")}
-    v = lambda k, c, at_=at_: float(at_[k][c]) / M  # noqa: E731  (bound per bottom)
-    w = wa if na.min() <= nb.min() else wb   # the lowest NAV that day in either portfolio; both strategies are then read on that one start, so every Δ is like for like
-    who = A if na.min() <= nb.min() else B
-    lv_a, lv_b = s.lv_equity * v("E_A", w), s.lv_equity * v("E_B", w) + s.lv_calls * v("call_val", w)
+    at_ = {k: paths[k].loc[r.trough] for k in ("nav_A", "nav_B", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "headroom_A", "dry_powder_B", "ltv_A", "interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B")}
     room_all, dp_all = at_["headroom_A"][alive] / M, at_["dry_powder_B"][alive] / M
-    n_alive = f"{int(at_['n_calls'][w])} call{'s' if at_['n_calls'][w] != 1 else ''} alive"
-    net = v("premiums_cum_B", w) - v("payoffs_cum_B", w)
-    worst = [
-        ["Worst trajectory", "", "", ""],
-        ["started on", f"{w:%d %b %Y}, {vs_peak(w, r)}", f"same start (the lowest NAV that day: {who})", ""],
-        ["NAV", f"{na[w] / M:,.0f} m ({na[w] / M / nav0 - 1:+.0%} from the start)", f"{nb[w] / M:,.0f} m ({nb[w] / M / nav0 - 1:+.0%} from the start)", pm((nb[w] - na[w]) / M)],
-        ["SPX held, market value", f"{v('E_A', w):,.0f} m", f"{v('E_B', w):,.0f} m", pm(v("E_B", w) - v("E_A", w))],
-        ["calls held, market value", "—", f"{v('call_val', w):,.0f} m ({n_alive} of the {s.build} bought, on a notional of {v('call_notional', w):,.0f} m of index)", pm(v("call_val", w))],
-        ["cash", "—", f"{v('cash_B', w):,.0f} m", pm(v("cash_B", w))],
-        ["loan", f"{v('loan', w):,.0f} m", f"{v('loan_B', w):,.0f} m" + (" (rotation still under way)" if at_["loan_B"][w] > 0.5e6 else ""), pm(v("loan_B", w) - v("loan", w))],
-        ["lending value of the holdings", f"{lv_a:,.0f} m ({s.lv_equity:.0%} of the SPX)", f"{lv_b:,.0f} m ({s.lv_equity:.0%} of the SPX + {s.lv_calls:.0%} of the calls)", pm(lv_b - lv_a)],
-        ["dry powder = lending value − loan + cash", f"{lv_a:,.0f} − {v('loan', w):,.0f} = {v('headroom_A', w):,.0f} m (LTV {at_['ltv_A'][w]:.0%}: a further {max(1 - at_['ltv_A'][w], 0):.0%} SPX fall to a margin call)",
-         f"{lv_b:,.0f} − {v('loan_B', w):,.0f} + {v('cash_B', w):,.0f} = {v('dry_powder_B', w):,.0f} m", pm(v("dry_powder_B", w) - v("headroom_A", w))],
-        ["cost since the start", f"interest {v('interest_cum_A', w):,.0f} m", f"premiums {v('premiums_cum_B', w):,.0f} m − payoffs {v('payoffs_cum_B', w):,.0f} m = {net:,.0f} m", pm(net - v("interest_cum_A", w))],
-    ]
-    # dry powder, same start: the starts are picked on the NAV distribution of the portfolio with the lowest NAV that day (usually Keep) — its lowest, the five percentiles, its highest —
-    # and both strategies' dry powder on each of those starts, Δ like for like
-    base, base_who = (na, A) if na.min() <= nb.min() else (nb, B)
-    picks = [("lowest", base.idxmin()), *((n, (base - base.quantile(q)).abs().idxmin()) for n, q in PCT), ("highest", base.idxmax())]
-    powder = [[f"Dry powder, same start, at the NAV percentiles of {base_who}", "", "", ""]]
-    for name, st_ in picks:
-        powder.append([f"at the {name} NAV: {base[st_] / M:,.0f} m ({st_:%d %b %Y} start)", f"{room_all[st_]:,.0f} m", f"{dp_all[st_]:,.0f} m", pm(dp_all[st_] - room_all[st_])])
-    powder.append(["rotation ahead on", "", "", f"{int((dp_all > room_all).sum()):,} of {len(alive):,} starts"])
-    show(worst + powder)
+    # the lowest NAV that day in either portfolio (usually the last start before the peak), both strategies read on that one start so every Δ is like for like
+    w = wa if na.min() <= nb.min() else wb
+    who = A if na.min() <= nb.min() else B
+    rows = trajectory(w, "Worst trajectory: the lowest NAV that day", f"same start (the lowest NAV that day: {who})", at_, r)
+    rows.append(["rotation has more dry powder on", "", "", f"{int((dp_all > room_all).sum()):,} of {len(alive):,} starts running that day"])
+    show(rows)
     st.caption(f"Market values on the bottom day, from the daily simulation of each trajectory. LTV = loan ÷ ({s.lv_equity:.0%} × SPX); the margin call comes when the SPX falls by a further 1 − LTV. "
                f"Dry powder = the lending value of what is held − loan + cash: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (sidebar, Advanced); the calls are at market value, not notional. "
-               f"Dry powder: the starts running that day are ranked by the NAV of {base_who} (the portfolio with the lowest NAV that day); at its lowest, 5th / 25th / 50th / 75th / 95th percentile and highest NAV, "
-               "the row gives that start and both strategies' dry powder on it, so every Δ is the same start; 'rotation ahead on' counts the starts (of all those running that day) where the rotation has more dry powder. "
-               "Worst trajectory: the start with the lowest NAV that day in either portfolio, and both strategies on that same start — its balance sheet and what it had cost since the start "
-               "(Keep: the interest capitalised on the loan; Rotate: the premiums paid for every call bought less the payoffs received at expiry; a positive cost Δ = the rotation had cost more).")
+               "Worst trajectory: the start with the lowest NAV that day in either portfolio, both strategies read on that same start so every Δ is like for like — its balance sheet and what it had "
+               "cost since the start: the interest capitalised on each loan (Rotate: only while the build was repaying it), and the premiums paid for every call bought less the payoffs received at expiry; "
+               "a positive cost Δ = the rotation had cost more. The last row counts the starts (of all those running that day) where the rotation has more dry powder.")
 
 low = pd.DataFrame({A: rs.loc[sel_all, "A: min headroom"] / M, B: rs.loc[sel_all, "B: min dry powder"] / M})
 st.markdown(f"- Margin calls keeping the loan: **{int(rs.loc[sel_all, 'A: margin call'].sum()):,}** of the {len(sel_all):,} selected starts; the closest was {low[A].min():,.0f} m of room "
