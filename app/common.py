@@ -71,15 +71,25 @@ def data_bounds() -> tuple[pd.Timestamp, pd.Timestamp]:
     return pd.Timestamp(d.date.iloc[0]), pd.Timestamp(d.date.iloc[-1])
 
 
+def _grid(first: str, last: str, freq: str) -> pd.DatetimeIndex:
+    """The start dates from ``first`` to ``last``: every trading day of the daily file ('D') or every Friday ('W-FRI')."""
+    if freq == "D":
+        d = lvs._load(str(lvs.DAILY_FILE))
+        return pd.DatetimeIndex(d.date[(d.date >= pd.Timestamp(first)) & (d.date <= pd.Timestamp(last))])
+    return pd.date_range(first, last, freq=freq)
+
+
+def _engine_kwargs(s: Setup) -> dict[str, object]:
+    """The sidebar setup as ``simulate`` keyword arguments."""
+    return {"equity0": s.equity, "loan0": s.loan, "spread": s.spread, "ltv_equity": s.lv_equity, "ltv_call": s.lv_calls, "tenor": s.tenor, "wht": s.wht,
+            "surplus": s.surplus, "cash_buffer": 0.0, "delta": None, "build_tranches": s.build, "replace_worthless": s.replace_worthless}
+
+
 @st.cache_data(show_spinner=False)
 def all_starts_cached(first: str, last: str, freq: str, s: Setup, until: str) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """The setup put on at every start of the grid ('D' every trading day, 'W-FRI' every week) and held to ``until``: one summary row per
     start, plus the month-end paths of the room before a margin call (A) and the dry powder (B) for every start; a progress bar the first time."""
-    if freq == "D":
-        d = lvs._load(str(lvs.DAILY_FILE))
-        starts = pd.DatetimeIndex(d.date[(d.date >= pd.Timestamp(first)) & (d.date <= pd.Timestamp(last))])
-    else:
-        starts = pd.date_range(first, last, freq=freq)
+    starts = _grid(first, last, freq)
     bar = st.progress(0.0, text=f"Simulating {len(starts):,} start dates …")
 
     def _p(i: int, n: int) -> None:
@@ -87,8 +97,7 @@ def all_starts_cached(first: str, last: str, freq: str, s: Setup, until: str) ->
 
     bottoms = tuple(pd.Timestamp(d) for d in lvs.corrections(0.20, wht=s.wht, on="price")["trough"])   # sampled exactly, for the worst trajectory at each bottom
     out = lvs.rolling_paths(starts, until, columns=("headroom_A", "dry_powder_B", "nav_A", "nav_B", "ltv_A", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B", "div_cum_A", "div_cum_B"), sample="M", mark_days=bottoms, progress=_p,
-                            equity0=s.equity, loan0=s.loan, spread=s.spread, ltv_equity=s.lv_equity, ltv_call=s.lv_calls, tenor=s.tenor, wht=s.wht,
-                            surplus=s.surplus, cash_buffer=0.0, delta=None, build_tranches=s.build, replace_worthless=s.replace_worthless)
+                            **_engine_kwargs(s))
     bar.empty()
     return out
 

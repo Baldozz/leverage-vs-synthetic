@@ -17,7 +17,7 @@ the start-date grid):
    the distribution of the final NAV drawn vertically on the right edge, with a zoom slider; on the end day, the distribution of the annualised return over the selected starts
    (lowest, percentiles, highest; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead on the same start; a checkbox excludes the
    rotations that stopped buying calls from every table); the corrections of 20 % or more in the SPX
-   price index (peak, bottom, recovery); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —
+   price index (peak, bottom, recovery, the lowest NAV of each portfolio on the bottom day); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —
    the worst trajectory in detail — the start with the lowest NAV that day in either portfolio, both strategies read on that same start with a Δ on every row (when it
    started and how far from the peak, NAV, SPX, calls at market value with the number alive, cash, loan, lending value, dry
    powder as lending value − loan + cash, LTV and the further fall to a margin call, the cost since the start on two rows: the interest paid on each loan, and the premiums paid less the payoffs received; the dividends received since the start, net of withholding and reinvested, on each portfolio's SPX) and the number of starts on which the rotation has more dry powder that day; the final value by start date; a CSV download of every start's results. Engine

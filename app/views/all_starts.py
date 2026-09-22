@@ -65,11 +65,11 @@ st.download_button("Download every start date as CSV", lvs.starts_table(rs).to_c
 
 # ---------------- every start date's path, Monte Carlo style, with the distribution of the final NAV on the right
 st.subheader(f"Every start date's path to {'today' if not at_bottom else end_label.split(' (')[0]}")
-step = 5 if freq == "D" else 1   # with daily starts draw every fifth (≈ weekly); the distributions further down still use every start
-cols = rs.index[::step]
-cols = cols[[d.year in sel_years for d in cols]]
-if excl:   # the rotations that stopped buying calls leave the fans too, in both portfolios (same start dates)
-    cols = cols[~some_lapsed.loc[cols].to_numpy()]
+sel_all = rs.index[[d.year in sel_years for d in rs.index]]   # every selected start: the profiles and every table below use all of them
+if excl:   # the rotations that stopped buying calls leave every chart and table, in both portfolios (same start dates)
+    sel_all = sel_all[~some_lapsed.loc[sel_all].to_numpy()]
+step = 5 if freq == "D" else 1   # with daily starts draw every fifth line (≈ weekly): 4,500 lines would be slow and unreadable
+cols = sel_all[::step]
 LIGHT_ORANGE = "#f0b46e"
 
 
@@ -101,7 +101,7 @@ def profile(vals: pd.Series, edges: np.ndarray, colr: str, name: str) -> go.Scat
                       hovertemplate="%{x:.1%} of the starts end near %{y:,.0f} m<extra></extra>")
 
 
-fin_all = pd.concat([rs.loc[cols, "NAV A end"], rs.loc[cols, "NAV B end"]]) / M
+fin_all = pd.concat([rs.loc[sel_all, "NAV A end"], rs.loc[sel_all, "NAV B end"]]) / M
 bin_w = max(float(np.ceil((fin_all.max() - fin_all.min()) / 40 / 50) * 50), 50.0)   # ≈ 40 bins, rounded to 50 m
 edges = np.arange(np.floor(fin_all.min() / bin_w) * bin_w, np.ceil(fin_all.max() / bin_w) * bin_w + bin_w, bin_w)
 years_shown = sorted({d.year for d in cols})
@@ -135,27 +135,24 @@ for title, w, end_col, base, light in ((A, paths["nav_A"], "NAV A end", RED, LIG
                                  marker={"colorscale": [[0, lo_c], [1, hi_c]], "cmin": y0, "cmax": y1, "color": [y0, y1], "showscale": True,
                                          "colorbar": {"title": {"text": name, "font": {"size": 11}, "side": "right"}, "orientation": "h", "thickness": 10, "len": 0.36, "x": x, "xanchor": "left",
                                                       "y": -0.22, "yanchor": "top", "tickvals": [y0, (y0 + y1) // 2, y1]}}), row=1, col=1)
-    fig.add_trace(profile(rs.loc[cols, end_col] / M, edges, base, title), row=1, col=2)
+    fig.add_trace(profile(rs.loc[sel_all, end_col] / M, edges, base, title), row=1, col=2)
     if title == B:
-        stopped_all = cols[some_lapsed.loc[cols].to_numpy()]
+        stopped_all = sel_all[some_lapsed.loc[sel_all].to_numpy()]
         if len(stopped_all):
             fig.add_trace(profile(rs.loc[stopped_all, end_col] / M, edges, ORANGE, "stopped"), row=1, col=2)
     fig.update_yaxes(title_text="NAV (USD m)", rangemode="tozero", range=[0, y_top] if y_top else None, row=1, col=1)
     fig.update_xaxes(title_text="Date", range=[x_lo, x_hi], row=1, col=1)
     fig.update_xaxes(title_text=f"share of starts, NAV on {end_day:%d %b %Y}", tickformat=".0%", row=1, col=2)
-    fig.update_layout(height=500, title={"text": f"{title} — {len(cols):,} start dates", "x": 0.02, "font": {"size": 15}}, **{**LAYOUT, "margin": {"l": 40, "r": 20, "t": 30, "b": 90}})
+    fig.update_layout(height=500, title={"text": f"{title} — {len(sel_all):,} start dates", "x": 0.02, "font": {"size": 15}}, **{**LAYOUT, "margin": {"l": 40, "r": 20, "t": 30, "b": 90}})
     st.plotly_chart(fig, width="stretch")
-n_stop = int(some_lapsed.loc[cols].sum())
-n_all = int(lost_all.loc[cols].sum())
-st.caption(f"One line per start date ({len(cols):,} lines{', every fifth trading-day start' if step > 1 else ''}), month-end values, each leaving from {(s.equity - s.loan) / M:,.0f} m on its own start day and running to {end_day:%d %b %Y}; "
-           f"the profile on the right is the distribution of the final NAV over the same starts, on the same scale. One colour per start year, light for the oldest and strong for the newest, newer years drawn in front. "
-           f"Yellow to orange, same light-to-strong logic and drawn in front, are the rotations that stopped buying calls after a correction (orange profile on the right): {n_stop:,} of the {len(cols):,} starts had at least one call expire worthless and not replaced, {n_all:,} of them lost every call. "
+n_stop = int(some_lapsed.loc[sel_all].sum())
+n_all = int(lost_all.loc[sel_all].sum())
+st.caption(f"One line per start date ({len(cols):,} lines{', one start in five on the daily grid' if step > 1 else ''}), month-end values, each leaving from {(s.equity - s.loan) / M:,.0f} m on its own start day and running to {end_day:%d %b %Y}; "
+           f"the profile on the right is the distribution of the final NAV over the {len(sel_all):,} selected starts, on the same scale. One colour per start year, light for the oldest and strong for the newest, newer years drawn in front. "
+           f"Yellow to orange, same light-to-strong logic and drawn in front, are the rotations that stopped buying calls after a correction (orange profile on the right): {n_stop:,} of the {len(sel_all):,} starts had at least one call expire worthless and not replaced, {n_all:,} of them lost every call. "
            "Dashed lines: the market bottoms (table below).")
 
 # ---------------- statistics of the final NAV over the selected starts (every start of the selected years, not subsampled)
-sel_all = rs.index[[d.year in sel_years for d in rs.index]]
-if excl:
-    sel_all = sel_all[~some_lapsed.loc[sel_all].to_numpy()]
 nav0 = (s.equity - s.loan) / M
 fin = pd.DataFrame({A: rs.loc[sel_all, "NAV A end"] / M, B: rs.loc[sel_all, "NAV B end"] / M})
 D = f"Δ {B} − {A}"
@@ -222,6 +219,8 @@ shown = [(lab, r, [c for c in sel_all if c in paths["nav_A"].columns and pd.notn
          for lab, r in zip(corr.index, corr.itertuples(), strict=True) if r.trough <= end_day and r.trough in paths["nav_A"].index]
 shown = [(lab, r, alive) for lab, r, alive in shown if alive]
 alive_at = {lab: alive for lab, _, alive in shown}
+
+
 lowest = {k: [paths[k].loc[corr.loc[lab, "trough"], alive_at[lab]].min() / M if lab in alive_at else np.nan for lab in corr.index] for k in ("nav_A", "nav_B")}
 bottoms = pd.DataFrame({
     "Correction": corr.index, "Previous peak": [d.date() for d in corr["peak"]], "SPX at the peak": corr["peak level"].to_numpy(),
@@ -232,7 +231,8 @@ bottoms = pd.DataFrame({
 st.dataframe(bottoms.style.format("{:,.0f}", subset=["SPX at the peak", "SPX at the bottom"]).format("{:+.0%}", subset=["Fall"]).format("{:,.0f} m", subset=[f"Lowest NAV, {A}", f"Lowest NAV, {B}"], na_rep="—"),
              width="stretch", hide_index=True, height=table_height(len(bottoms)))
 st.caption("Falls of 20 % or more in the SPX price index since 1997: the day of the previous peak, the lowest close, and the day the index regained the peak. The bottoms are the dashed lines on the charts above. "
-           "Lowest NAV: on the bottom day, the lowest NAV of each portfolio over the selected starts running that day (usually different start dates); — when no selected start was running. "
+           "Lowest NAV: on the bottom day, the lowest NAV of each portfolio over the selected starts running that day (usually different start dates; both portfolios reach their low of the correction on that day); "
+           "— when no selected start was running. "
            "One tab per bottom below: the worst trajectory in detail (the lowest NAV that day in either portfolio, both strategies read on that same start) and the count of starts on which "
            "the rotation has more dry powder that day.")
 spx_px = lvs._load(str(lvs.DAILY_FILE)).set_index("date")["spx_px_last"]
@@ -301,9 +301,9 @@ st.markdown(f"- Margin calls keeping the loan: **{int(rs.loc[sel_all, 'A: margin
             f"- Over the whole holding period, at its lowest point the rotation has more dry powder than keeping the loan on **{float((low[B] > low[A]).mean()):.0%}** of the selected starts (median difference {(low[B] - low[A]).median():+,.0f} m).")
 
 # ---------------- reading
-st.markdown(f"- The rotated portfolio lost **all** its calls on **{lost_all.mean():.0%}** of start dates ({int(lost_all.sum()):,}) and **some** of them on {some_lapsed.mean():.0%}; "
-            f"on the other {1 - some_lapsed.mean():.0%} every call expired in the money and was replaced.\n"
-            f"- Annualised over each start's own holding period, the median return to today is {ann[A].median():+.1%} ({A}) vs {ann[B].median():+.1%} ({B}).\n"
-            f"- Margin calls ({A}): **{int(rs['A: margin call'].sum()):,}** start dates over all {len(rs):,} starts.")
+st.markdown(f"- Of the {len(sel_all):,} selected starts, the rotated portfolio lost **all** its calls on **{lost_all.loc[sel_all].mean():.0%}** ({int(lost_all.loc[sel_all].sum()):,}) and **some** of them on "
+            f"{some_lapsed.loc[sel_all].mean():.0%}; on the other {1 - some_lapsed.loc[sel_all].mean():.0%} every call expired in the money and was replaced"
+            + (" (the rotations that let a call lapse are excluded by the checkbox above).\n" if excl else ".\n")
+            + f"- Annualised over each start's own holding period, the median return to {end_day:%d %b %Y} over the selected starts is {ann_sel[A].median():+.1%} ({A}) vs {ann_sel[B].median():+.1%} ({B}).")
 st.caption("Consecutive start dates overlap almost entirely, so the charts show the range of historical outcomes, not independent draws. Calls are priced and marked with Black–Scholes on SPXFP (q = r) at the implied vol of the day, "
            "extrapolated from the 24-month Bloomberg series; the delta is the model delta of the ATM call. No bid/ask, no early unwind. Dividends reinvested net of withholding; cash earns the 3-month T-bill.")

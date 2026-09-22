@@ -129,6 +129,7 @@ def test_all_starts_page_weekly_grid() -> None:
     at.multiselect(key="r_years").set_value([2008, 2009]).run()   # a few start years only
     assert not at.exception, [e.value for e in at.exception]
     assert any("stopped buying calls after a correction" in c.value and "105 lines" in c.value for c in at.caption) and "105 selected starts" in " ".join(h.value for h in at.subheader)
+    assert any(m.value.startswith("- Of the 105 selected starts, the rotated portfolio lost **all** its calls on **0%** (0)") for m in at.markdown)   # the closing lines follow the selection: no 2008–09 start lost a call
     at.multiselect(key="r_years").set_value([]).run()
     gfc = next(o for o in at.selectbox(key="r_end").options if "2007–2009 bottom" in o)   # held until the GFC bottom: every start that completed its rotation a month before 9 Mar 2009
     at.selectbox(key="r_end").set_value(gfc).run()
@@ -138,7 +139,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert pct(stats.iloc[4, 1]) < 0 and pct(stats.iloc[1, 1]) < -0.15   # at the GFC bottom most starts are under water
     assert len(at.table) == 3 and len(at.dataframe) == 1   # distribution; only the 2002 and 2009 bottoms fall inside runs ending 9 Mar 2009
     assert at.table[2].value.iloc[8, 1].startswith("381 − 366 = 15 m (LTV 96%")   # the worst levered trajectory at the bottom, same as when held to today   # at the GFC bottom the median levered start is well above half its lending value
-    assert any("lost **all** its calls" in m.value for m in at.markdown) and any("Margin calls (Keep the loan): **0**" in m.value for m in at.markdown)
+    assert any("lost **all** its calls" in m.value for m in at.markdown) and any("Margin calls keeping the loan: **0** of the" in m.value for m in at.markdown)
     # exclude the rotations that stopped buying calls: fewer starts everywhere below the fans, the worst trajectory no longer has a worthless expiry
     at.selectbox(key="r_end").set_value(at.selectbox(key="r_end").options[0]).run()
     at.checkbox(key="r_excl").set_value(True).run()
