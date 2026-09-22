@@ -107,7 +107,7 @@ edges = np.arange(np.floor(fin_all.min() / bin_w) * bin_w, np.ceil(fin_all.max()
 years_shown = sorted({d.year for d in cols})
 y0, y1 = years_all[0], years_all[-1]
 LIGHT_RED, LIGHT_BLUE, LIGHT_YELLOW = "#f6c6c6", "#c3cfe8", "#fbe8b0"
-zoom = st.slider("Zoom: years shown on the fans (the NAV axis follows the highest path inside the window; drag a rectangle on a chart to zoom further, double-click to reset)",
+zoom = st.slider("Zoom: years shown on the fans and on the chart by start date below (the NAV axes follow the highest value inside the window; drag a rectangle on a chart to zoom further, double-click to reset)",
                  first_day.year, end_day.year, (first_day.year, end_day.year), key="r_zoom")
 x_lo, x_hi = pd.Timestamp(year=zoom[0], month=1, day=1), min(pd.Timestamp(year=zoom[1], month=12, day=31), end_day)
 for title, w, end_col, base, light in ((A, paths["nav_A"], "NAV A end", RED, LIGHT_RED), (B, paths["nav_B"], "NAV B end", BLUE, LIGHT_BLUE)):
@@ -135,15 +135,20 @@ for title, w, end_col, base, light in ((A, paths["nav_A"], "NAV A end", RED, LIG
                                  marker={"colorscale": [[0, lo_c], [1, hi_c]], "cmin": y0, "cmax": y1, "color": [y0, y1], "showscale": True,
                                          "colorbar": {"title": {"text": name, "font": {"size": 11}, "side": "right"}, "orientation": "h", "thickness": 10, "len": 0.36, "x": x, "xanchor": "left",
                                                       "y": -0.22, "yanchor": "top", "tickvals": [y0, (y0 + y1) // 2, y1]}}), row=1, col=1)
-    fig.add_trace(profile(rs.loc[sel_all, end_col] / M, edges, base, title), row=1, col=2)
+    fin_col = rs.loc[sel_all, end_col] / M
+    fig.add_trace(profile(fin_col, edges, base, title), row=1, col=2)
     if title == B:
         stopped_all = sel_all[some_lapsed.loc[sel_all].to_numpy()]
         if len(stopped_all):
             fig.add_trace(profile(rs.loc[stopped_all, end_col] / M, edges, ORANGE, "stopped"), row=1, col=2)
+    marks = [("min", float(fin_col.min())), ("median", float(fin_col.median())), ("max", float(fin_col.max()))]   # the lowest, median and highest final NAV, marked on the profile
+    for _, level in marks:
+        fig.add_hline(y=level, line={"color": GREY, "width": 1, "dash": "dot"}, row=1, col=2)
     fig.update_yaxes(title_text="NAV (USD m)", rangemode="tozero", range=[0, y_top] if y_top else None, row=1, col=1)
+    fig.update_yaxes(showticklabels=True, side="right", tickvals=[lv for _, lv in marks], ticktext=[f"{nm} {lv:,.0f}" for nm, lv in marks], tickfont={"size": 10}, row=1, col=2)
     fig.update_xaxes(title_text="Date", range=[x_lo, x_hi], row=1, col=1)
     fig.update_xaxes(title_text=f"share of starts, NAV on {end_day:%d %b %Y}", tickformat=".0%", row=1, col=2)
-    fig.update_layout(height=500, title={"text": f"{title} — {len(sel_all):,} start dates", "x": 0.02, "font": {"size": 15}}, **{**LAYOUT, "margin": {"l": 40, "r": 20, "t": 30, "b": 90}})
+    fig.update_layout(height=500, title={"text": f"{title} — {len(sel_all):,} start dates", "x": 0.02, "font": {"size": 15}}, **{**LAYOUT, "margin": {"l": 40, "r": 90, "t": 30, "b": 90}})
     st.plotly_chart(fig, width="stretch")
 n_stop = int(some_lapsed.loc[sel_all].sum())
 n_all = int(lost_all.loc[sel_all].sum())
@@ -151,6 +156,40 @@ st.caption(f"One line per start date ({len(cols):,} lines{', one start in five o
            f"the profile on the right is the distribution of the final NAV over the {len(sel_all):,} selected starts, on the same scale. One colour per start year, light for the oldest and strong for the newest, newer years drawn in front. "
            f"Yellow to orange, same light-to-strong logic and drawn in front, are the rotations that stopped buying calls after a correction (orange profile on the right): {n_stop:,} of the {len(sel_all):,} starts had at least one call expire worthless and not replaced, {n_all:,} of them lost every call. "
            "Dashed lines: the market bottoms (table below).")
+
+# ---------------- NAV on the end day by start date: Keep, Rotate and the net on the same start, one point per selected start (gaps where starts are not selected)
+st.subheader(f"NAV on {end_day:%d %b %Y} by start date")
+end_a = (rs["NAV A end"] / M).where(rs.index.isin(sel_all))
+end_b = (rs["NAV B end"] / M).where(rs.index.isin(sel_all))
+net = end_b - end_a
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05)
+hov = "start %{x|%d %b %Y}<br>%{fullData.name}: %{y:,.0f} m<extra></extra>"
+fig.add_trace(go.Scatter(x=rs.index, y=end_a, name=A, line={"color": RED, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=end_b, name=B, line={"color": BLUE, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=net.clip(lower=0.0), name="rotation ahead", fill="tozeroy", mode="none", fillcolor="rgba(11, 42, 111, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=net.clip(upper=0.0), name="rotation behind", fill="tozeroy", mode="none", fillcolor="rgba(192, 0, 0, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=net, name=f"net: {B} − {A}", line={"color": "#333333", "width": 1.2}, connectgaps=False, hovertemplate=hov), row=2, col=1)
+for r in corr[corr["trough"] <= end_day].itertuples():   # a start at a peak is the worst case for both, a start at a bottom the best: mark them on the start-date axis
+    for day, dash, what in ((r.peak, "dot", "peak"), (r.trough, "dash", "bottom")):
+        if rs.index[0] <= day <= rs.index[-1]:
+            fig.add_vline(x=day.timestamp() * 1000, line={"color": GREY, "width": 1, "dash": dash}, row="all", col=1)
+            fig.add_annotation(x=day, y=1, yref="y domain", text=f"{what} {day:%b %Y}", showarrow=False, font={"size": 10, "color": GREY}, xanchor="left", yanchor="top", row=1, col=1)
+in_win = (rs.index >= x_lo) & (rs.index <= x_hi) & rs.index.isin(sel_all)   # the zoom slider: the same window of start dates, the axes following the values inside it
+nav_win = pd.concat([end_a[in_win], end_b[in_win]])
+net_win = net[in_win]
+fig.update_yaxes(title_text="NAV (USD m)", rangemode="tozero", range=[0, float(nav_win.max()) * 1.05] if nav_win.notna().any() else None, row=1, col=1)
+fig.update_yaxes(title_text="net (USD m)", zeroline=True, zerolinecolor=GREY,
+                 range=[min(float(net_win.min()), 0.0) * 1.1 - 1.0, max(float(net_win.max()), 0.0) * 1.1 + 1.0] if net_win.notna().any() else None, row=2, col=1)
+x_win = [max(x_lo, pd.Timestamp(rs.index[0]) - pd.DateOffset(days=30)), min(x_hi, pd.Timestamp(rs.index[-1]) + pd.DateOffset(days=30))]
+fig.update_xaxes(range=x_win, row=1, col=1)
+fig.update_xaxes(title_text="Start date", range=x_win, row=2, col=1)
+fig.update_layout(height=640, title={"text": f"On {end_day:%d %b %Y}: the NAV of each portfolio and the net, by start date — {len(sel_all):,} starts", "x": 0.02, "font": {"size": 15}},
+                  **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": {"l": 40, "r": 20, "t": 30, "b": 40}})
+st.plotly_chart(fig, width="stretch")
+st.caption(f"Top: the NAV on {end_day:%d %b %Y} of the two portfolios put on at each start date (x axis), one point per selected start, both leaving from {(s.equity - s.loan) / M:,.0f} m on that day. "
+           "Earlier starts have been held longer, so the level falls along the axis; read the two lines against each other. Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation "
+           "ends ahead and red where it ends behind. Dotted lines: the market peaks (a start there is bought at the top); dashed lines: the bottoms (a start there is bought at the low). "
+           "Gaps: starts outside the selected years or excluded by the checkbox. The zoom slider above sets the window of start dates. The table below gives the distribution of the same values as annualised returns.")
 
 # ---------------- statistics of the final NAV over the selected starts (every start of the selected years, not subsampled)
 nav0 = (s.equity - s.loan) / M

@@ -15,7 +15,8 @@ holds the backtest's inputs (premium, premium mode, strike window, cash leg):
    9 Sep 1997 to the last start whose calls have expired, each held to the day chosen in *Held until* — today, or one of
    the market bottoms (Oct 2002, Mar 2009, Mar 2020, Oct 2022). The page shows: the fan of every trajectory (one colour
    per start year, light to strong, the rotations that stopped buying calls after a correction in yellow to orange) with
-   the distribution of the final NAV drawn vertically on the right edge, with a zoom slider; on the end day, the distribution of the annualised return over the selected starts
+   the distribution of the final NAV drawn vertically on the right edge, with a zoom slider; the NAV on the end day by start date — Keep, Rotate and the net Rotate − Keep on the
+   same start, one point per start with the market peaks and bottoms marked; on the end day, the distribution of the annualised return over the selected starts
    (lowest, percentiles, highest; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead on the same start; a checkbox excludes the
    rotations that stopped buying calls from every table); the corrections of 20 % or more in the SPX
    price index (peak, bottom, recovery, the lowest NAV of each portfolio on the bottom day); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —

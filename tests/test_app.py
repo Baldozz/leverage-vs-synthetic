@@ -45,7 +45,7 @@ def test_all_starts_page_weekly_grid() -> None:
     at.switch_page("views/all_starts.py")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.get("plotly_chart")) == 2 and len(at.dataframe) == 1 and len(at.table) == 5   # two fans; the corrections dataframe; tables: distribution, one per bottom (4)
+    assert len(at.get("plotly_chart")) == 3 and len(at.dataframe) == 1 and len(at.table) == 5   # two fans + the NAV-by-start-date chart; the corrections dataframe; tables: distribution, one per bottom (4)
     assert any("1,202 lines" in c.value for c in at.caption)   # empty selection = every start year
     pct = lambda cell: float(str(cell).rstrip("%")) / 100  # noqa: E731
     pts = ["lowest", "5th percentile", "25th percentile", "median", "75th percentile", "95th percentile", "highest"]
@@ -65,6 +65,31 @@ def test_all_starts_page_weekly_grid() -> None:
     from fosim.analytics.leverage_stress import rolling_paths, simulate
     m = 1e6
     pm = lambda x: f"{round(float(x) / m) + 0.0:+,.0f} m"  # noqa: E731
+    # NAV on the end day by start date: Keep, Rotate and the net (Rotate − Keep) on every weekly start, the first point checked against a direct simulation
+    import json
+    by_start = json.loads(at.get("plotly_chart")[2].proto.spec)["data"]
+    assert [t["name"] for t in by_start] == ["Keep the loan", "Rotate into calls", "rotation ahead", "rotation behind", "net: Rotate into calls − Keep the loan"]
+    ka, kb, kn = by_start[0], by_start[1], by_start[4]
+    assert len(ka["x"]) == len(kb["x"]) == len(kn["x"]) == 1202 and ka["x"][0].startswith("1997-09-12") and ka["x"][-1].startswith("2020-09-18")
+    p0, _ = simulate("1997-09-12", "2026-09-14")
+    assert ka["y"][0] == pytest.approx(p0["nav_A"].iloc[-1] / m, rel=1e-9) and kb["y"][0] == pytest.approx(p0["nav_B"].iloc[-1] / m, rel=1e-9)
+    assert all(n_ == pytest.approx(b_ - a_, abs=1e-9) for a_, b_, n_ in zip(ka["y"], kb["y"], kn["y"], strict=True)) and min(kn["y"]) < 0 < max(kn["y"])
+    assert by_start[2]["y"] == [max(v, 0.0) for v in kn["y"]] and by_start[3]["y"] == [min(v, 0.0) for v in kn["y"]]   # the shaded areas split the net at zero
+    lay = json.loads(at.get("plotly_chart")[2].proto.spec)["layout"]
+    assert lay["legend"]["y"] < 0 and lay["yaxis"]["range"][1] == pytest.approx(max(max(ka["y"]), max(kb["y"])) * 1.05)   # legend under the chart; the NAV axis follows the highest value in the zoom window
+    # the profiles beside the fans: the lowest, median and highest final NAV are labelled on the right axis
+    fan_a = json.loads(at.get("plotly_chart")[0].proto.spec)["layout"]["yaxis2"]
+    assert [t.split(" ")[0] for t in fan_a["ticktext"]] == ["min", "median", "max"] and fan_a["tickvals"][0] == pytest.approx(min(ka["y"])) and fan_a["tickvals"][2] == pytest.approx(max(ka["y"]))
+    assert fan_a["tickvals"][1] == pytest.approx(float(pd.Series(ka["y"]).median()))
+    # the zoom slider narrows both the fans and the chart by start date
+    at.slider(key="r_zoom").set_value((2012, 2016)).run()
+    assert not at.exception, [e.value for e in at.exception]
+    lay_z = json.loads(at.get("plotly_chart")[2].proto.spec)["layout"]
+    assert lay_z["xaxis2"]["range"][0].startswith("2012-01-01") and lay_z["xaxis2"]["range"][1].startswith("2016-12-31")
+    zoomed = [y_ for t in (ka, kb) for x_, y_ in zip(t["x"], t["y"], strict=True) if "2012-01-01" <= x_[:10] <= "2016-12-31"]   # the NAV axis follows the highest value of either portfolio inside the window
+    assert lay_z["yaxis"]["range"][1] == pytest.approx(max(zoomed) * 1.05) and max(zoomed) < max(kb["y"])
+    at.slider(key="r_zoom").set_value((1997, 2026)).run()
+    assert not at.exception, [e.value for e in at.exception]
     bottoms = at.dataframe[0].value
     assert list(bottoms["Correction"]) == ["2000–2002", "2007–2009", "2020", "2022"] and [str(d) for d in bottoms["Bottom"]] == ["2002-10-09", "2009-03-09", "2020-03-23", "2022-10-12"]
     assert [round(v) for v in bottoms["SPX at the bottom"]] == [777, 677, 2237, 3577] and [str(d) for d in bottoms["Previous peak"]] == ["2000-03-24", "2007-10-09", "2020-02-19", "2022-01-03"]
