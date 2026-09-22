@@ -4,32 +4,18 @@ For every trading day since September 1997 an at-the-money call on SPXFP (S&P 50
 index) maturing `tenor` years later is bought for a fixed USD amount, or the same amount is invested in the
 index; both legs are read at the option's maturity. Same construction as the J.P. Morgan / Bloomberg chart
 ("Backtested PnL of SPXFP 5yr ATM Call Option vs. Cash Investment"), with our own Bloomberg series.
-Engine: fosim.analytics.call_vs_cash. This page keeps its own inputs (tenor, premium, dates, withholding tax).
+Engine: fosim.analytics.call_vs_cash. Inputs: the page's sidebar (common.premium_sidebar); the tenor and the withholding tax are shared with page 1.
 """
 
 from __future__ import annotations
-
-import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
-
-import fosim.analytics.call_vs_cash as cvc  # noqa: E402
-
-M = 1e6
-
-
-
-@st.cache_data
-def strike_range(tenor: float) -> tuple[pd.Timestamp, pd.Timestamp]:
-    return cvc.strike_date_range(tenor)
+import fosim.analytics.call_vs_cash as cvc
+from common import M, premium_setup, table_height
 
 
 @st.cache_data
@@ -37,50 +23,23 @@ def call_vs_cash_backtest(tenor: float, premium_usd: float, start: str, end: str
     return cvc.backtest(tenor, premium_usd, start, end, prem_fixed, cash_leg, wht)
 
 
-def table_height(n_rows: int) -> int:
-    """Pixel height that shows every row of st.dataframe without an inner scrollbar (35 px per row + header + border)."""
-    return 35 * (n_rows + 1) + 3
-
-
-st.title("Long-dated ATM call on SPXFP vs. cash investment — historical backtest")
-st.subheader("Backtested P&L of a long-dated ATM call on SPXFP vs. a cash investment in the index")
-st.caption("Every trading day is a hypothetical strike date: buy an ATM call on SPXFP for the premium below (notional = premium ÷ premium-% of the day) "
-           "or invest the same amount in the index; both are read at the option's maturity. Plotted against the maturity date. "
+ps = premium_setup()
+bt_tenor, bt_prem_usd, bt_fixed = ps.tenor, ps.premium_usd, ps.prem_fixed
+market = bt_fixed is None
+leg_txt = "SPXFP" if ps.cash_leg == "SPXFP" else "SPX (dividends reinvested)"
+st.title("Call premium history — a long-dated ATM call on SPXFP against a cash investment")
+st.caption("Every trading day is a hypothetical strike date: buy an ATM call on SPXFP for the premium set in the sidebar (notional = premium ÷ premium-% of the day) "
+           "or invest the same amount in the index; both are read at the option's maturity and plotted against the maturity date. "
            "Same construction as the J.P. Morgan / Bloomberg chart (their 5-year chart: strikes May-2006 → Aug-2021) with our own data: the premium is the one implied by the vol series and the Treasury yield of the day for the chosen tenor, not a dealer quote.")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    bt_prem_usd = st.number_input("Premium / investment (USD m)", 1.0, 1000.0, 10.0, 1.0, key="bt_prem_usd") * M
-    bt_tenor = float(st.selectbox("Call tenor (years)", [5, 7, 10], key="bt_tenor", help="Tenors with their own Treasury and implied-vol columns in the data (Assumptions 19l/19n)."))
-with c2:
-    first_strike, last_strike = strike_range(bt_tenor)
-    # the usable window shrinks as the tenor grows: follow it unless the user has moved the field themselves
-    lo, hi = first_strike.date(), last_strike.date()
-    if st.session_state.get("bt_end") in (None, st.session_state.get("bt_end_auto")):
-        st.session_state["bt_end"] = st.session_state["bt_end_auto"] = hi
-    else:
-        st.session_state["bt_end"] = min(st.session_state["bt_end"], hi)
-    if st.session_state.get("bt_start") is not None:
-        st.session_state["bt_start"] = min(st.session_state["bt_start"], hi)
-    bt_start = st.date_input("First strike date", lo, min_value=lo, max_value=hi, key="bt_start")
-    bt_end = st.date_input("Last strike date", hi, min_value=lo, max_value=hi, key="bt_end")
-with c3:
-    # options carry the tenor, so no key: the selection is kept in session state across tenor changes
-    bt_mode = st.radio("Premium paid", [f"Market: {bt_tenor:g}y vol and {bt_tenor:g}y Treasury of the day", "Fixed % of notional"], index=1 if st.session_state.get("bt_mode_fixed") else 0)
-    st.session_state["bt_mode_fixed"] = not bt_mode.startswith("Market")
-    bt_fixed = st.number_input("Fixed premium (% of notional)", 1.0, 60.0, 15.0, 0.5, key="bt_fixed", disabled=bt_mode.startswith("Market")) / 100.0
-with c4:
-    bt_leg = st.radio("Cash investment in", ["SPXFP", "SPX with dividends reinvested"], key="bt_leg", help="The J.P. Morgan chart invests the cash leg in SPXFP itself.")
-    bt_wht = st.number_input("Dividend withholding tax (%)", 0.0, 50.0, 15.0, 1.0, key="bt_wht") / 100.0
-bt, bt_info = call_vs_cash_backtest(float(bt_tenor), float(bt_prem_usd), str(bt_start), str(bt_end), None if bt_mode.startswith("Market") else float(bt_fixed), "SPXFP" if bt_leg == "SPXFP" else "SPX_TR", float(bt_wht))
-st.caption(f"The data run to {bt_info.last_date:%d %b %Y}, so at {bt_tenor:g} years the last strike date that still reaches maturity is **{last_strike:%d %b %Y}**: the strike window shrinks as the tenor grows.")
-if bt_mode.startswith("Market") and bt_info.fallback:
+bt, bt_info = call_vs_cash_backtest(bt_tenor, bt_prem_usd, str(ps.start), str(ps.end), bt_fixed, ps.cash_leg, ps.wht)
+if market and bt_info.fallback:
     st.warning(f"No {bt_tenor:g}-year Treasury / implied-vol series in the data: the premium is computed with the 5-year columns ({bt_info.rate_col}, {bt_info.vol_col}). "
                f"Add columns `ust_{round(bt_tenor)}y` and `iv_{round(bt_tenor)}y` to data/market_data_daily.csv for a tenor-consistent premium.")
 if bt.empty:
     st.warning("No strike date in that range has reached maturity within the data (ends 2026-09-14).")
 else:
-    st.markdown(f"**{bt_tenor:g}-year ATM call on SPXFP vs. {bt_prem_usd / M:,.0f} m in {'SPXFP' if bt_leg == 'SPXFP' else 'SPX (dividends reinvested)'} — "
-                f"{len(bt):,} strike dates {bt.strike_date.min().date()} → {bt.strike_date.max().date()}, premium {'of the day' if bt_mode.startswith('Market') else f'fixed at {bt_fixed:.1%}'}**")
+    st.markdown(f"**{bt_tenor:g}-year ATM call on SPXFP vs. {bt_prem_usd / M:,.0f} m in {leg_txt} — "
+                f"{len(bt):,} strike dates {bt.strike_date.min().date()} → {bt.strike_date.max().date()}, premium {'of the day' if market else f'fixed at {bt_fixed:.1%}'}**")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=bt.index, y=bt.call_pnl / M, name=f"{bt_tenor:g}y SPXFP ATM call payoff − {bt_prem_usd / M:,.0f} m premium", line={"color": "#0b2a6f", "width": 1.6}))
     fig.add_trace(go.Scatter(x=bt.index, y=bt.cash_pnl / M, name=f"{bt_tenor:g}y cash investment − {bt_prem_usd / M:,.0f} m principal", line={"color": "#c00000", "width": 1.6}))

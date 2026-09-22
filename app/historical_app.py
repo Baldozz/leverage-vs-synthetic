@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import streamlit as st
 
-from common import sidebar_setup
+from common import premium_sidebar, sidebar_setup
 
 st.set_page_config(page_title="Keep the loan or rotate into calls", layout="wide")
-sidebar_setup()
-st.navigation([
+pg = st.navigation([
     st.Page("views/all_starts.py", title="Any start date since 1997", default=True),
     st.Page("views/premium_history.py", title="Call premium history"),
-]).run()
+])
+if pg.title == "Call premium history":   # each page has its own sidebar; the call tenor and the withholding tax are common to both
+    premium_sidebar()
+else:
+    sidebar_setup()
+pg.run()

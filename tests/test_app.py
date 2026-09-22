@@ -152,27 +152,47 @@ def test_all_starts_page_weekly_grid() -> None:
 
 
 def test_premium_history_page_unchanged() -> None:
-    """Page 2 (call-vs-cash backtest): no tabs, chart + tables rendered at default widgets; its own tenor drives every label."""
+    """Page 2 (call-vs-cash backtest): its own sidebar (the tenor and the withholding tax shared with page 1), no tabs, chart + tables at default widgets;
+    the shared tenor drives every label; the page's inputs survive a visit to page 1."""
     at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=300)
     at.switch_page("views/premium_history.py")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.tabs) == 0
+    assert len(at.tabs) == 0 and len(at.columns) == 0   # the inputs are in the sidebar, not in columns at the top
+    assert [w.label for w in at.sidebar.number_input] == ["Premium / investment (USD m)", "Fixed premium (% of notional)", "Dividend withholding tax (%)"]
+    assert [w.label for w in at.sidebar.selectbox] == ["Call tenor (years)"] and [w.label for w in at.sidebar.radio] == ["Premium paid", "Invested in"]
+    assert [w.label for w in at.sidebar.date_input] == ["First strike date", "Last strike date"]
     assert len(at.dataframe) == 2  # summary table + return-distribution percentiles
     assert all(len(d.value) <= 12 for d in at.dataframe)  # both fit the fixed height set in the app (12 rows)
     assert not at.warning  # 5-year tenor: no fallback warning
     assert at.date_input(key="bt_end").value == bt_end_for(5.0)
+    mode = lambda: at.sidebar.radio[0]  # noqa: E731  (the premium-mode radio carries the tenor in its options, so it has no key)
     for t in (7.0, 10.0):  # tenor-specific columns exist: no fallback warning
-        at.selectbox(key="bt_tenor").set_value(int(t)).run()
+        at.selectbox(key="s_tenor").set_value(int(t)).run()
         assert not at.exception, [e.value for e in at.exception]
         assert not at.warning
         assert any(f"{t:g}-year ATM call" in m.value for m in at.markdown)
-        assert any(f"{t:g}y Treasury of the day" in o for o in at.radio[0].options)  # premium-mode option follows the tenor
+        assert any(f"{t:g}y Treasury of the day" in o for o in mode().options)  # premium-mode option follows the tenor
         assert at.date_input(key="bt_end").value == bt_end_for(t)  # last strike date follows the tenor
-    at.radio[0].set_value("Fixed % of notional").run()
-    at.selectbox(key="bt_tenor").set_value(5).run()
-    assert at.radio[0].value == "Fixed % of notional"  # premium mode survives a tenor change
+    mode().set_value("Fixed % of notional").run()
+    at.selectbox(key="s_tenor").set_value(5).run()
+    assert mode().value == "Fixed % of notional"  # premium mode survives a tenor change
     assert any("fixed at" in m.value for m in at.markdown)
+    # the page's own inputs survive a visit to page 1 (whose sidebar does not draw them), and the shared tenor is the same widget on both pages
+    at.number_input(key="bt_prem_usd").set_value(20.0).run()
+    at.selectbox(key="s_tenor").set_value(7).run()
+    assert any("20 m in SPXFP" in m.value for m in at.markdown)
+    at.session_state["s_grid"] = "every week"
+    at.switch_page("views/all_starts.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox(key="s_tenor").value == 7 and not any(w.key == "bt_prem_usd" for w in at.sidebar.number_input)   # tenor shared; page 2's inputs not on page 1
+    assert any("7-year ATM calls on SPXFP" in c.value for c in at.caption)
+    at.switch_page("views/premium_history.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.number_input(key="bt_prem_usd").value == 20.0 and at.selectbox(key="s_tenor").value == 7 and mode().value == "Fixed % of notional"
+    assert any("7-year ATM call on SPXFP vs. 20 m in SPXFP" in m.value for m in at.markdown)
 
 
 @pytest.mark.slow
