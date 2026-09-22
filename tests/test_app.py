@@ -71,11 +71,11 @@ def test_all_starts_page_weekly_grid() -> None:
     assert list(bottoms.columns[-2:]) == ["Lowest NAV, Keep the loan", "Lowest NAV, Rotate into calls"] and bottoms.iloc[:, -2:].notna().all().all()
     gfc = at.table[2].value   # one table per bottom, in order: 2002, 2009, 2020, 2022; the GFC bottom's worst levered trajectory started on the dot-com peak day
     detail = ["started on", "NAV", "SPX held, market value", "calls held, market value", "cash", "loan", "lending value of the holdings", "dry powder = lending value − loan + cash",
-              "interest paid since the start", "premiums paid − payoffs received since the start"]
+              "interest paid since the start", "premiums paid − payoffs received since the start", "dividends received since the start (net of 15% withholding, reinvested in the SPX)"]
     assert list(gfc.columns) == cols_
     # one block (the lowest NAV that day, both strategies read on it), then the count row
-    assert list(gfc.iloc[:11, 0]) == ["Worst trajectory: the lowest NAV that day", *detail] and gfc.iloc[11, 0] == "rotation has more dry powder on" and len(gfc) == 12
-    assert list(gfc.iloc[0, 1:]) == ["", "", ""] and gfc.iloc[11, 3].endswith(" of 600 starts running that day")
+    assert list(gfc.iloc[:12, 0]) == ["Worst trajectory: the lowest NAV that day", *detail] and gfc.iloc[12, 0] == "rotation has more dry powder on" and len(gfc) == 13
+    assert list(gfc.iloc[0, 1:]) == ["", "", ""] and gfc.iloc[12, 3].endswith(" of 600 starts running that day")
     # the worst trajectory: the lowest NAV that day in either portfolio (Keep, the 24 Mar 2000 start), both strategies read on that start, Δ on every row
     assert gfc.iloc[1, 1] == "24 Mar 2000, 2755 days before the peak, SPX 1,527 (-2.4% vs the peak)" and gfc.iloc[1, 2] == "same start (the lowest NAV that day: Keep the loan)" and gfc.iloc[1, 3] == ""
     assert gfc.iloc[2, 1].startswith("142 m (-81% from the start)")
@@ -99,6 +99,9 @@ def test_all_starts_page_weekly_grid() -> None:
     assert da["interest_cum_B"] == pytest.approx(pa["interest_B"].sum()) and 5e6 < da["interest_cum_B"] < 15e6   # ≈ 9 m: 250 m at ≈ 7 % repaid over a year
     net_b = da["premiums_cum_B"] - da["payoffs_cum_B"]
     assert gfc.iloc[10, 1] == "—" and gfc.iloc[10, 2] == f"{da['premiums_cum_B'] / m:,.0f} m − {da['payoffs_cum_B'] / m:,.0f} m = {net_b / m:,.0f} m" and gfc.iloc[10, 3] == pm(net_b)
+    # dividends since the start, both portfolios: the rotation holds fewer SPX units so it received less; both totals reconcile with the SPX total return (engine test)
+    assert gfc.iloc[11, 1] == f"{da['div_cum_A'] / m:,.0f} m" and gfc.iloc[11, 2] == f"{da['div_cum_B'] / m:,.0f} m" and gfc.iloc[11, 3] == pm(da["div_cum_B"] - da["div_cum_A"])
+    assert 0.0 < da["div_cum_B"] < da["div_cum_A"] and da["div_cum_A"] == pytest.approx(pa.loc[:"2009-03-09", "div_A"].sum())
     assert int(da["n_calls"]) == 1 and da["loan_B"] == 0.0
     # the picks and the count over every weekly start running on 9 Mar 2009 (the page's grid): recompute all from the engine on the same starts
     bottom = pd.Timestamp("2009-03-09")
@@ -109,7 +112,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert na.min() == pytest.approx(da["nav_A"]) and na.idxmin() == pd.Timestamp("2000-03-24")   # the worst trajectory is the lowest NAV that day over all 600 starts
     # the corrections dataframe: the lowest NAV of each portfolio on the bottom day, over the same 600 starts (the GFC row)
     assert bottoms.iloc[1, -2] == pytest.approx(na.min() / m) and bottoms.iloc[1, -1] == pytest.approx(nb.min() / m) and bottoms.iloc[1, -2] == pytest.approx(da["nav_A"] / m)
-    assert gfc.iloc[11, 3] == f"{int((db_ > ra).sum()):,} of 600 starts running that day"   # the count row, recomputed from the engine on the same 600 starts
+    assert gfc.iloc[12, 3] == f"{int((db_ > ra).sum()):,} of 600 starts running that day"   # the count row, recomputed from the engine on the same 600 starts
     assert 560 <= int((db_ > ra).sum()) <= 600 and nb.min() > na.min()   # at the GFC bottom the rotation has more dry powder on (almost) every start
     assert at.table[1].value.iloc[1, 1].startswith("24 Mar 2000, on the peak day, SPX 1,527 (+0.0% vs the peak)")   # the 2002 bottom: the worst start is the peak day too
     assert at.table[1].value.iloc[1, 2] == "same start (the lowest NAV that day: Keep the loan)"
@@ -121,7 +124,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert 1 <= int(d20["n_bought"]) < 52 and int(d20["n_calls"]) == int(d20["n_bought"]) and d20["loan_B"] > 0.5e6
     assert covid.iloc[4, 2] == f"{d20['call_val'] / m:,.0f} m ({int(d20['n_calls'])} calls alive of the {int(d20['n_bought'])} bought so far: {int(d20['n_bought'])} of the 52 weekly steps done, on a notional of {d20['call_notional'] / m:,.0f} m of index)"
     assert covid.iloc[6, 2] == f"{d20['loan_B'] / m:,.0f} m (rotation still under way)"
-    assert any(mk.value.startswith("**2022 bottom — 12 Oct 2022**") for mk in at.markdown) and len(at.table[4].value) == 12   # the 2022 correction has its table too
+    assert any(mk.value.startswith("**2022 bottom — 12 Oct 2022**") for mk in at.markdown) and len(at.table[4].value) == 13   # the 2022 correction has its table too
     assert any("Same start, same end" in m.value for m in at.markdown)
     at.multiselect(key="r_years").set_value([2008, 2009]).run()   # a few start years only
     assert not at.exception, [e.value for e in at.exception]

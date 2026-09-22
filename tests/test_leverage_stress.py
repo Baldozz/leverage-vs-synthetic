@@ -7,9 +7,11 @@ import pandas as pd
 import pytest
 
 from fosim.analytics.leverage_stress import (
+    DAILY_FILE,
     PATH_COLUMNS,
     PATH_NAMES,
     AccountingIdentityError,
+    _load,
     corrections,
     paths_table,
     rolling_paths,
@@ -356,3 +358,13 @@ def test_cumulative_cost_columns_match_the_summary() -> None:
     assert p["cash_B"].iloc[-1] == pytest.approx(sum(r.payoff - r.premium_paid + r.equity_sold for r in info.rolls) + p["cash_int_B"].sum())
     assert np.allclose(p["dry_powder_B"], 0.75 * p["E_B"] + 0.0 * p["call_val"] - p["loan_B"] + p["cash_B"]) and (p["dry_powder_B"] - 0.75 * p["E_B"]).iloc[-1] == pytest.approx(p["cash_B"].iloc[-1])
     assert np.allclose(p["nav_B"], p["E_B"] + p["call_val"] + p["cash_B"] - p["loan_B"])
+    # dividends: received on the SPX held, net of withholding, reinvested the same day — never paid out, never used for the interest (which is capitalised).
+    # Each day's dividend = the SPX value less what the price move alone would have given; over the path they reconcile with the total return exactly.
+    px = _load(str(DAILY_FILE)).set_index("date").loc[p.index, "spx_px_last"].to_numpy()
+    assert np.allclose(p["div_A"].to_numpy()[1:], p["E_A"].to_numpy()[1:] - p["E_A"].to_numpy()[:-1] * px[1:] / px[:-1]) and p["div_A"].iloc[0] == 0.0
+    assert p["div_cum_A"].iloc[-1] == pytest.approx(p["div_A"].sum()) and p["div_cum_B"].iloc[-1] == pytest.approx(p["div_B"].sum())
+    assert (p["div_A"].iloc[1:] > 0.0).all() and (p["div_B"].iloc[1:] > 0.0).all() and 0.0 < p["div_cum_B"].iloc[-1] < p["div_cum_A"].iloc[-1]   # the rotation holds fewer SPX units
+    assert np.allclose(p["div_B"], p["eq_pnl_B"] - (p["E_B"].shift(1).fillna(0.0) * (px / np.roll(px, 1) - 1.0)).where(p.index != p.index[0], 0.0))   # part of the equity P&L on the units held over the day
+    yrs = (p.index[-1] - p.index[0]).days / 365.25
+    yld = p["div_cum_A"].iloc[-1] / p["E_A"].mean() / yrs   # ≈ the average trailing yield net of 15 % withholding over 2003–2012 (≈ 2.0 % × 0.85)
+    assert 0.012 < yld < 0.022

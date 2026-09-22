@@ -146,11 +146,14 @@ def simulate(
     iv = d[vol_col].to_numpy(dtype=np.float64) / 100.0
     base = d.loan_base.to_numpy(dtype=np.float64) / 100.0
     tbill = d.tbill_3m.to_numpy(dtype=np.float64) / 100.0
-    tr = total_return_index(d.spx_px_last.to_numpy(dtype=np.float64), d.spx_div_yld.to_numpy(dtype=np.float64), d.date.to_numpy(), wht)
+    px = d.spx_px_last.to_numpy(dtype=np.float64)
+    tr = total_return_index(px, d.spx_div_yld.to_numpy(dtype=np.float64), d.date.to_numpy(), wht)
     tr = tr / tr[0]
+    div_step = np.concatenate([[0.0], tr[1:] - tr[:-1] * px[1:] / px[:-1]])   # dividend per unit of the index held over the day, net of withholding: total return less the price move
 
-    # ---- A: equity and the capitalised loan
+    # ---- A: equity and the capitalised loan (interest added to the loan, never paid from the dividends, which are reinvested in the SPX)
     E_A = equity0 * tr
+    div_A = equity0 / tr[0] * div_step
     loan = np.empty(n)
     loan[0] = loan0
     for k in range(1, n):
@@ -196,7 +199,7 @@ def simulate(
     loan_B = loan0
     cash = 0.0
     E_B, call_val, call_notional, cash_B, loan_B_arr = (np.empty(n) for _ in range(5))
-    eq_pnl_B, call_pnl_B, cash_int, interest_B, exposure_B = (np.zeros(n) for _ in range(5))
+    eq_pnl_B, call_pnl_B, cash_int, interest_B, exposure_B, div_B = (np.zeros(n) for _ in range(6))
     prem_day, pay_day = np.zeros(n), np.zeros(n)   # premiums paid / payoffs received on the day (build, rolls)
     is_roll = np.zeros(n, dtype=bool)
     n_calls = np.zeros(n, dtype=np.int64)          # tranches alive at the end of each day
@@ -244,6 +247,7 @@ def simulate(
     exposure_B[0] = E_B[0] + delta_notional
     for k in range(1, n):
         eq_pnl_B[k] = eq_units * (tr[k] - tr[k - 1])
+        div_B[k] = eq_units * div_step[k]       # on the units held over the day, before the day's trades (part of eq_pnl_B, reinvested)
         cash_int[k] = cash * tbill[k - 1] * dt360[k]
         cash += cash_int[k]
         interest_B[k] = loan_B * (base[k - 1] + spread) * dt360[k]
@@ -315,6 +319,7 @@ def simulate(
         "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
         "n_bought": np.cumsum(bought_day),   # tranches bought to each day: the build steps done so far, plus every replacement at expiry
         "interest_cum_A": np.cumsum(interest), "interest_cum_B": np.cumsum(interest_B), "premiums_cum_B": np.cumsum(prem_day), "payoffs_cum_B": np.cumsum(pay_day),   # costs since the start, to each day
+        "div_A": div_A, "div_B": div_B, "div_cum_A": np.cumsum(div_A), "div_cum_B": np.cumsum(div_B),   # dividends received (net of withholding, reinvested in the SPX), on the day and since the start
     }, index=pd.DatetimeIndex(d.date, name="date"))
     info = StressInfo(start=pd.Timestamp(dates[0]), end=pd.Timestamp(dates[-1]), premium0=tot_premium / tot_notional, rotation=tot_sold, delta0=tot_sold / tot_notional, notional0=tot_notional,
                       units0=sum(b.premium_paid / b.premium_frac for b in builds) / S[0], loan_base0=float(base[0]), rate_col=rate_col, vol_col=vol_col, tenor=float(tenor),
@@ -362,6 +367,7 @@ def _start_row(p: pd.DataFrame, info: StressInfo) -> dict[str, object]:
         "B: min dry powder": float(p["dry_powder_B"].iloc[b]), "B: min dry powder date": p.index[b],
         "trough": p.index[t], "drawdown at trough": float(p["drawdown"].iloc[t]), "B: capacity at trough": float(p["cap_B"].iloc[t]), "B: dry powder at trough": float(p["dry_powder_B"].iloc[t]), "A: headroom at trough": float(p["headroom_A"].iloc[t]),
         "A: LTV at trough": float(p["ltv_A"].iloc[t]), "interest paid A": float(p["interest_A"].sum()), "interest paid B": float(p["interest_B"].sum()),
+        "dividends A": float(p["div_A"].sum()), "dividends B": float(p["div_B"].sum()),
         "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
         "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
         "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
@@ -460,6 +466,7 @@ def starts_table(rs: pd.DataFrame) -> pd.DataFrame:
         "keep the loan: dry powder today (m)": (rs["A: headroom end"] / m).round(1), "rotate into calls: dry powder today (m)": (rs["B: dry powder end"] / m).round(1),
         "keep the loan: interest paid (m)": (rs["interest paid A"] / m).round(1), "rotate into calls: interest paid during the build (m)": (rs["interest paid B"] / m).round(1),
         "rotate into calls: premiums paid (m)": (rs["premiums paid"] / m).round(1),
+        "keep the loan: dividends received (m)": (rs["dividends A"] / m).round(1), "rotate into calls: dividends received (m)": (rs["dividends B"] / m).round(1),
         "rotate into calls: payoffs received (m)": (rs["payoffs received"] / m).round(1), "rotate into calls: SPX sold at rolls (m)": (rs["equity sold at rolls"] / m).round(1),
         "calls expired": rs["rolls"], "calls expired worthless": rs["B: lapsed"], "all calls gone on": [d.isoformat() if pd.notna(d) else "" for d in pd.DatetimeIndex(rs["B: calls lost on"]).date],
         "keep the loan today: SPX (m)": (rs["end: equity A"] / m).round(1), "keep the loan today: loan (m)": (rs["end: loan A"] / m).round(1),

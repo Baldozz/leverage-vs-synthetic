@@ -268,6 +268,7 @@ def trajectory(w: pd.Timestamp, title: str, same_start: str, at_: dict[str, pd.S
          f"{lv_b:,.0f} − {v('loan_B'):,.0f} + {v('cash_B'):,.0f} = {v('dry_powder_B'):,.0f} m", pm(v("dry_powder_B") - v("headroom_A"))],
         ["interest paid since the start", f"{v('interest_cum_A'):,.0f} m", f"{v('interest_cum_B'):,.0f} m (during the build)", pm(v("interest_cum_B") - v("interest_cum_A"))],
         ["premiums paid − payoffs received since the start", "—", f"{v('premiums_cum_B'):,.0f} m − {v('payoffs_cum_B'):,.0f} m = {net:,.0f} m", pm(net)],
+        [f"dividends received since the start (net of {s.wht:.0%} withholding, reinvested in the SPX)", f"{v('div_cum_A'):,.0f} m", f"{v('div_cum_B'):,.0f} m", pm(v("div_cum_B") - v("div_cum_A"))],
     ]
 
 
@@ -278,7 +279,7 @@ for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d 
     na, nb = paths["nav_A"].loc[r.trough, alive], paths["nav_B"].loc[r.trough, alive]
     wa, wb = na.idxmin(), nb.idxmin()
     st.markdown(f"**{lab} bottom — {r.trough:%d %b %Y}**, SPX {corr.loc[lab, 'trough level']:,.0f}, {r.drawdown:+.0%} from the {r.peak:%d %b %Y} peak; {len(alive):,} starts running that day")
-    at_ = {k: paths[k].loc[r.trough] for k in ("nav_A", "nav_B", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "headroom_A", "dry_powder_B", "ltv_A", "interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B")}
+    at_ = {k: paths[k].loc[r.trough] for k in ("nav_A", "nav_B", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "headroom_A", "dry_powder_B", "ltv_A", "interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B", "div_cum_A", "div_cum_B")}
     room_all, dp_all = at_["headroom_A"][alive] / M, at_["dry_powder_B"][alive] / M
     # the lowest NAV that day in either portfolio (usually the last start before the peak), both strategies read on that one start so every Δ is like for like
     w = wa if na.min() <= nb.min() else wb
@@ -290,7 +291,8 @@ for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d 
                f"Dry powder = the lending value of what is held − loan + cash: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (sidebar, Advanced); the calls are at market value, not notional. "
                "Worst trajectory: the start with the lowest NAV that day in either portfolio, both strategies read on that same start so every Δ is like for like — its balance sheet and what it had "
                "cost since the start: the interest capitalised on each loan (Rotate: only while the build was repaying it), and the premiums paid for every call bought less the payoffs received at expiry; "
-               "a positive cost Δ = the rotation had cost more. The last row counts the starts (of all those running that day) where the rotation has more dry powder.")
+               "a positive cost Δ = the rotation had cost more. Dividends: received on the SPX held by each portfolio, net of withholding, and reinvested in the SPX the same day — they are inside "
+               "the SPX market value, never paid out; the interest on the loan is added to the loan, not paid from them. The last row counts the starts (of all those running that day) where the rotation has more dry powder.")
 
 low = pd.DataFrame({A: rs.loc[sel_all, "A: min headroom"] / M, B: rs.loc[sel_all, "B: min dry powder"] / M})
 st.markdown(f"- Margin calls keeping the loan: **{int(rs.loc[sel_all, 'A: margin call'].sum()):,}** of the {len(sel_all):,} selected starts; the closest was {low[A].min():,.0f} m of room "
