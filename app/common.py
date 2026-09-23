@@ -30,6 +30,7 @@ class Setup:
     spread: float          # over the 3-month base rate, fraction
     lv_equity: float       # lending value of the equity, fraction
     lv_calls: float        # lending value of the calls, fraction
+    lv_cash: float         # lending value of the T-bills the rotation holds, fraction
     wht: float             # dividend withholding tax, fraction
     tenor: float           # years
     build: int             # weekly steps of the rotation (1 = one shot)
@@ -73,9 +74,10 @@ def _wht_widget(help_: str) -> None:
 
 
 def sidebar_setup() -> Setup:
-    """Page 1's sidebar: the two portfolios. Drawn by the entry script when that page is shown; read back with ``setup``."""
+    """Page 1's sidebar: the two portfolios. Drawn by the entry script when that page is shown; read back with ``setup``. The page itself
+    runs only what its *Launch simulation* button last launched (the sidebar setup, the grid, the start year and the end day)."""
     for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_weeks", 52), ("s_worthless", "not replaced"),
-                 ("s_surplus", "kept in T-bills"), ("s_lv_calls", 0.0), ("s_grid", "every trading day")):
+                 ("s_surplus", "kept in T-bills"), ("s_lv_calls", 0.0), ("s_lv_cash", 90.0), ("s_grid", "every trading day")):
         _restore(k, v)
     with st.sidebar:
         st.markdown("**Today**")
@@ -91,17 +93,18 @@ def sidebar_setup() -> Setup:
             st.radio("A call that expires worthless is", ["not replaced", "replaced, SPX sold to pay it"], key="s_worthless", help="A call that expires in the money is always replaced by a new ATM call on the same index units, paid from the payoff, then cash, then by selling SPX.")
             st.radio("Payoff left after a roll", list(_SURPLUS), key="s_surplus", help="What happens to the part of a payoff not needed for the new call's premium.")
             st.number_input("Lending value of the calls (%)", 0.0, 100.0, step=5.0, key="s_lv_calls")
+            st.number_input("Lending value of the T-bills (%)", 0.0, 100.0, step=5.0, key="s_lv_cash", help="The most the bank lends against the T-bills the rotation holds (the payoffs kept in cash). PLACEHOLDER 90 %.")
             st.radio("Start dates", ["every trading day", "every week"], key="s_grid", help="Every trading day takes a few minutes the first time, then it is cached.")
         st.caption("Historical data only, September 1997 to today.")
-    _remember("s_equity", "s_loan", "s_spread", "s_lv", "s_tenor", "s_weeks", "s_wht", "s_worthless", "s_surplus", "s_lv_calls", "s_grid")
+    _remember("s_equity", "s_loan", "s_spread", "s_lv", "s_tenor", "s_weeks", "s_wht", "s_worthless", "s_surplus", "s_lv_calls", "s_lv_cash", "s_grid")
     return setup()
 
 
 def setup() -> Setup:
-    """The Setup from the sidebar widgets' session state (pages run after the entry script has drawn them)."""
+    """The Setup the sidebar widgets currently show (pages run after the entry script has drawn them)."""
     s = st.session_state
-    return Setup(float(s["s_equity"]) * M, float(s["s_loan"]) * M, float(s["s_spread"]) / 1e4, float(s["s_lv"]) / 100.0, float(s["s_lv_calls"]) / 100.0, float(s["s_wht"]) / 100.0,
-                 float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"))
+    return Setup(float(s["s_equity"]) * M, float(s["s_loan"]) * M, float(s["s_spread"]) / 1e4, float(s["s_lv"]) / 100.0, float(s["s_lv_calls"]) / 100.0, float(s["s_lv_cash"]) / 100.0,
+                 float(s["s_wht"]) / 100.0, float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"))
 
 
 @st.cache_data
@@ -167,7 +170,7 @@ def _grid(first: str, last: str, freq: str) -> pd.DatetimeIndex:
 
 def _engine_kwargs(s: Setup) -> dict[str, object]:
     """The sidebar setup as ``simulate`` keyword arguments."""
-    return {"equity0": s.equity, "loan0": s.loan, "spread": s.spread, "ltv_equity": s.lv_equity, "ltv_call": s.lv_calls, "tenor": s.tenor, "wht": s.wht,
+    return {"equity0": s.equity, "loan0": s.loan, "spread": s.spread, "ltv_equity": s.lv_equity, "ltv_call": s.lv_calls, "ltv_cash": s.lv_cash, "tenor": s.tenor, "wht": s.wht,
             "surplus": s.surplus, "cash_buffer": 0.0, "delta": None, "build_tranches": s.build, "replace_worthless": s.replace_worthless}
 
 
@@ -194,13 +197,14 @@ def corrections_cached(threshold: float, wht: float, on: str = "price") -> pd.Da
     return lvs.corrections(threshold, wht=wht, on=on)
 
 
-def start_grid(s: Setup) -> tuple[str, pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]:
-    """(freq, first day, last start, last strike, last day) for the all-start-dates pages: the last start is the one whose last weekly
-    tranche, struck ``tenor`` years before the end of the data, still expires inside it."""
+def start_grid(s: Setup, grid: str) -> tuple[str, pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]:
+    """(freq, first day, last start, last strike, last day) for the all-start-dates pages: the last start is the one whose rotation was
+    complete a month before the last data day; ``last strike`` is the last day on which a tranche still expires inside the data (starts
+    whose last tranche was struck after it have calls not yet expired). ``grid`` is the sidebar's start-date choice."""
     first_day, last_day = data_bounds()
-    freq = "D" if str(st.session_state.get("s_grid", "every trading day")).startswith("every trading") else "W-FRI"
+    freq = "D" if grid.startswith("every trading") else "W-FRI"
     last_strike = last_day - pd.DateOffset(months=round(s.tenor * 12))
-    last_start = last_strike - pd.Timedelta(7 * (s.build - 1), unit="D")
+    last_start = last_day - pd.DateOffset(days=7 * (s.build - 1) + 30)
     return freq, first_day, last_start, last_strike, last_day
 
 

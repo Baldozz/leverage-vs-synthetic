@@ -1,4 +1,4 @@
-"""Any start date since 1997 — the same two portfolios put on at every start of the grid and held to today."""
+"""Historical simulation — the same two portfolios put on at every start of the grid since 1997 and held to today or to a market bottom."""
 
 from __future__ import annotations
 
@@ -20,34 +20,53 @@ from common import (
     A,
     B,
     M,
+    Setup,
     all_starts_cached,
     corrections_cached,
+    data_bounds,
     setup,
     start_grid,
     table_height,
 )
 
-s = setup()
-freq, first_day, last_start, last_strike, last_day = start_grid(s)
-corr = corrections_cached(0.20, s.wht, "price")
-
-st.title("Any start date since 1997")
+corr = corrections_cached(0.20, 0.15, "price")   # the SPX price index: independent of the setup
+first_day, last_day = data_bounds()
 ends = {f"today ({last_day:%d %b %Y})": last_day, **{f"the {lab} bottom ({tr_:%d %b %Y}, SPX {lvl:,.0f})": tr_ for lab, tr_, lvl in zip(corr.index, corr["trough"], corr["trough level"], strict=True)}}
-c_years, c_end, c_x = st.columns([2, 2, 1.6])   # start years, the final day, the exclusion of the rotations that stopped buying calls
-end_label = c_end.selectbox("Held until", list(ends), key="r_end", help="Every start runs to this day: today, or the bottom of a market correction to see how the portfolios looked at the worst moment.")
-end_day = ends[end_label]
-at_bottom = end_day != last_day
-if at_bottom:   # every start that had completed its rotation at least a month before the bottom
-    last_start = min(last_start, end_day - pd.Timedelta(7 * (s.build - 1) + 30, unit="D"))
-years_all = list(range(first_day.year, last_start.year + 1))
-picked = c_years.multiselect("Start years", years_all, default=[], key="r_years", placeholder="All years — or pick one or more", help="Empty = every start year.")
-sel_years = picked or years_all
+
+
+def window(s_: Setup, grid_: str, end_label_: str) -> tuple[str, pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp, bool, list[int]]:
+    """(freq, last start, last strike, end day, at a bottom, the start years) of one run: every start up to a week before the end day — today or a
+    bottom, the same rule; the rotations still under way on that day run with the steps taken so far."""
+    freq_, _, _, last_strike_, _ = start_grid(s_, grid_)
+    end_day_ = ends[end_label_]
+    last_start_ = end_day_ - pd.DateOffset(days=7)
+    return freq_, last_start_, last_strike_, end_day_, end_day_ != last_day, list(range(first_day.year, last_start_.year + 1))
+
+
+# ---------------- the controls: the run is defined by the sidebar, the grid, the start year and the end day, and runs only when the button is pressed
+st.title("Historical simulation")
+s_now, grid_now = setup(), str(st.session_state["s_grid"])
+c_years, c_end, c_x, c_go = st.columns([2, 2, 1.6, 1.2])   # start years, the final day, the exclusion of the rotations that stopped buying calls, the launch
+end_label_now = c_end.selectbox("Held until", list(ends), key="r_end", help="Every start runs to this day: today, or the bottom of a market correction to see how the portfolios looked at the worst moment.")
+_, _, _, _, _, years_now = window(s_now, grid_now, end_label_now)
+picked_now = int(c_years.selectbox("Starts from", years_now, key="r_years", help="Every start from 1 January of that year to the last start; the first year = every start."))
 excl = c_x.checkbox("Exclude the rotations that stopped buying calls", key="r_excl", help="Drops from every table below the starts whose rotation let at least one call lapse "
                     "(both portfolios of that start). A selection on the outcome: it removes the rotation's bad cases, not the loan's.")
-st.caption(f"The same two portfolios put on at every {'trading day' if freq == 'D' else 'week'} from {first_day:%d %b %Y} to {last_start:%d %b %Y} and held to {end_day:%d %b %Y}. "
-           + ("The last start is the one whose rotation was complete a month before the bottom. " if at_bottom else f"The last start is the one whose last weekly tranche, struck on {last_strike:%d %b %Y}, still expires inside the data. ")
-           + f"The rotation: {s.tenor:g}-year ATM calls on SPXFP, {s.build} weekly step{'s' if s.build > 1 else ''}, the loan gone after the build; a call that expires in the money is replaced, "
-           + ("a call that expires worthless lapses." if not s.replace_worthless else "a worthless call is replaced too."))
+current = (s_now, grid_now, picked_now, end_label_now)
+launched = st.session_state.get("launched")
+c_go.markdown("<div style='height: 1.75rem'></div>", unsafe_allow_html=True)   # the button level with the widgets
+if c_go.button("Launch simulation", key="r_launch", type="primary", width="stretch", disabled=current == launched,
+               help="Runs the page on the sidebar setup, the start year and the end day above. Greyed out while nothing has changed since the last run."):
+    st.session_state["launched"] = current
+    st.rerun()   # redraw at once: the button greyed out, the page on the new run
+if launched is None:
+    st.info("Set the portfolios in the sidebar and the start year and end day above, then press **Launch simulation**.")
+    st.stop()
+if current != launched:
+    st.caption("The parameters have changed: the page still shows the last launched run. Press **Launch simulation** to update it.")
+s, grid, picked, end_label = launched
+freq, last_start, last_strike, end_day, at_bottom, years_all = window(s, grid, end_label)
+sel_years = [y for y in years_all if y >= picked]
 if last_start <= first_day:
     st.warning("No start date fits before that day: shorten the rotation.")
     st.stop()
@@ -56,6 +75,16 @@ rs, paths = all_starts_cached(str(first_day.date()), str(last_start.date()), fre
 if rs.empty:
     st.warning("No start date fits: shorten the rotation or the tenor.")
     st.stop()
+expiry_cut = last_strike - pd.DateOffset(days=7 * (s.build - 1))   # the last start whose 52nd tranche still expires inside the data
+unexpired = pd.Series(rs.index > expiry_cut, index=rs.index)      # later starts: some calls have not reached expiry, their NAV is partly a model mark
+rotating = rs["end: loan B"] > 0.5e6                              # a loan left on the end day: the rotation was still under way
+st.caption(f"The same two portfolios put on at every {'trading day' if freq == 'D' else 'week'} from {first_day:%d %b %Y} to {last_start:%d %b %Y} (a week before the end day) and held to {end_day:%d %b %Y}. "
+           + (f"**{int(rotating.sum()):,} of the {len(rs):,} starts (after {rs.index[rotating][0]:%d %b %Y}) were still rotating on {end_day:%d %b %Y}**, with the loan partly repaid and only the tranches "
+              "bought so far. " if rotating.any() else "")
+           + (f"**{int(unexpired.sum()):,} starts (after {expiry_cut:%d %b %Y}) have calls that have not yet expired**: their NAV on the end day is a model mark, "
+              "not a settled outcome. " if unexpired.any() else "Every start has had all its calls expire at least once. ")
+           + f"The rotation: {s.tenor:g}-year ATM calls on SPXFP, {s.build} weekly step{'s' if s.build > 1 else ''}, the loan gone after the build; a call that expires in the money is replaced, "
+           + ("a call that expires worthless lapses." if not s.replace_worthless else "a worthless call is replaced too."))
 years = rs["years"]
 ann = pd.DataFrame({A: (1.0 + rs["A return"]) ** (1.0 / years) - 1.0, B: (1.0 + rs["B return"]) ** (1.0 / years) - 1.0}, index=rs.index)
 lost_all = rs["B: call notional end"] <= 0.0                       # no call left today: the whole option part lapsed
@@ -107,8 +136,9 @@ edges = np.arange(np.floor(fin_all.min() / bin_w) * bin_w, np.ceil(fin_all.max()
 years_shown = sorted({d.year for d in cols})
 y0, y1 = years_all[0], years_all[-1]
 LIGHT_RED, LIGHT_BLUE, LIGHT_YELLOW = "#f6c6c6", "#c3cfe8", "#fbe8b0"
-zoom = st.slider("Zoom: years shown on the fans and on the chart by start date below (the NAV axes follow the highest value inside the window; drag a rectangle on a chart to zoom further, double-click to reset)",
-                 first_day.year, end_day.year, (first_day.year, end_day.year), key="r_zoom")
+bounds = (picked, end_day.year)   # the zoom window follows the launched start year and end day: a widget per range, so it resets to the whole range when they change
+zoom = st.slider("Zoom: years shown on the fans and on the charts by start date below (the NAV axes follow the highest value inside the window; drag a rectangle on a chart to zoom further, double-click to reset)",
+                 bounds[0], bounds[1], bounds, key=f"r_zoom_{bounds[0]}_{bounds[1]}") if bounds[0] < bounds[1] else bounds
 x_lo, x_hi = pd.Timestamp(year=zoom[0], month=1, day=1), min(pd.Timestamp(year=zoom[1], month=12, day=31), end_day)
 for title, w, end_col, base, light in ((A, paths["nav_A"], "NAV A end", RED, LIGHT_RED), (B, paths["nav_B"], "NAV B end", BLUE, LIGHT_BLUE)):
     fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.8, 0.2], horizontal_spacing=0.02)
@@ -162,25 +192,48 @@ st.subheader(f"NAV on {end_day:%d %b %Y} by start date")
 end_a = (rs["NAV A end"] / M).where(rs.index.isin(sel_all))
 end_b = (rs["NAV B end"] / M).where(rs.index.isin(sel_all))
 net = end_b - end_a
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05)
+in_win = (rs.index >= x_lo) & (rs.index <= x_hi) & rs.index.isin(sel_all)   # the zoom slider: the same window of start dates, the axes following the values inside it
 hov = "start %{x|%d %b %Y}<br>%{fullData.name}: %{y:,.0f} m<extra></extra>"
+
+
+def mark_lowest(fig_: go.Figure, ya: pd.Series, yb: pd.Series, name_a: str, name_b: str, colr: str, dy: int) -> None:
+    """The lowest value of ``ya`` inside the zoom window, marked on the top panel and labelled with ``yb`` on the same start."""
+    w_ = ya[in_win].dropna()
+    if w_.empty:
+        return
+    i = w_.idxmin()
+    fig_.add_trace(go.Scatter(x=[i], y=[w_[i]], mode="markers", name=f"lowest {name_a}", marker={"color": colr, "size": 10, "line": {"color": "white", "width": 1.5}}, showlegend=False,
+                              hovertemplate=f"lowest {name_a}: %{{y:,.0f}} m ({i:%d %b %Y} start)<br>{name_b} there: {yb[i]:,.0f} m<extra></extra>"), row=1, col=1)
+    other = BLUE if colr == RED else RED
+    fig_.add_annotation(x=i, y=w_[i], text=f"<span style='color:{colr}'><b>{w_[i]:,.0f} m</b></span> · {i:%d %b %Y} · <span style='color:{other}'>{yb[i]:,.0f} m</span>", showarrow=True,
+                        arrowhead=2, arrowcolor=colr, ax=0, ay=dy, font={"size": 11, "color": "#333333"}, bgcolor="rgba(255, 255, 255, 0.9)", bordercolor=GREY, borderwidth=1, row=1, col=1)
+
+
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05)
 fig.add_trace(go.Scatter(x=rs.index, y=end_a, name=A, line={"color": RED, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=end_b, name=B, line={"color": BLUE, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=net.clip(lower=0.0), name="rotation ahead", fill="tozeroy", mode="none", fillcolor="rgba(11, 42, 111, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=net.clip(upper=0.0), name="rotation behind", fill="tozeroy", mode="none", fillcolor="rgba(192, 0, 0, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=net, name=f"net: {B} − {A}", line={"color": "#333333", "width": 1.2}, connectgaps=False, hovertemplate=hov), row=2, col=1)
-for r in corr[corr["trough"] <= end_day].itertuples():   # a start at a peak is the worst case for both, a start at a bottom the best: mark them on the start-date axis
-    for day, dash, what in ((r.peak, "dot", "peak"), (r.trough, "dash", "bottom")):
-        if rs.index[0] <= day <= rs.index[-1]:
-            fig.add_vline(x=day.timestamp() * 1000, line={"color": GREY, "width": 1, "dash": dash}, row="all", col=1)
-            fig.add_annotation(x=day, y=1, yref="y domain", text=f"{what} {day:%b %Y}", showarrow=False, font={"size": 10, "color": GREY}, xanchor="left", yanchor="top", row=1, col=1)
-in_win = (rs.index >= x_lo) & (rs.index <= x_hi) & rs.index.isin(sel_all)   # the zoom slider: the same window of start dates, the axes following the values inside it
+
+
+def mark_corrections(fig_: go.Figure) -> None:
+    """Every market peak (dotted) and bottom (dashed) up to the end day, on both panels, whatever the start-date range."""
+    for r_ in corr[corr["trough"] <= end_day].itertuples():   # a start at a peak is the worst case for both, a start at a bottom the best
+        for day, dash, what in ((r_.peak, "dot", "peak"), (r_.trough, "dash", "bottom")):
+            fig_.add_vline(x=day.timestamp() * 1000, line={"color": GREY, "width": 1, "dash": dash}, row="all", col=1)
+            fig_.add_annotation(x=day, y=1, yref="y domain", text=f"{what} {day:%b %Y}", showarrow=False, font={"size": 10, "color": GREY}, xanchor="left", yanchor="top", row=1, col=1)
+
+
+mark_corrections(fig)
+mark_lowest(fig, end_a, end_b, A, B, RED, -45)
+mark_lowest(fig, end_b, end_a, B, A, BLUE, -85)
 nav_win = pd.concat([end_a[in_win], end_b[in_win]])
 net_win = net[in_win]
 fig.update_yaxes(title_text="NAV (USD m)", rangemode="tozero", range=[0, float(nav_win.max()) * 1.05] if nav_win.notna().any() else None, row=1, col=1)
 fig.update_yaxes(title_text="net (USD m)", zeroline=True, zerolinecolor=GREY,
                  range=[min(float(net_win.min()), 0.0) * 1.1 - 1.0, max(float(net_win.max()), 0.0) * 1.1 + 1.0] if net_win.notna().any() else None, row=2, col=1)
-x_win = [max(x_lo, pd.Timestamp(rs.index[0]) - pd.DateOffset(days=30)), min(x_hi, pd.Timestamp(rs.index[-1]) + pd.DateOffset(days=30))]
+x_win = [max(x_lo, pd.Timestamp(rs.index[0]) - pd.DateOffset(days=30)), x_hi + pd.DateOffset(days=30)]   # to the end day, so every peak and bottom up to it is in view
 fig.update_xaxes(range=x_win, row=1, col=1)
 fig.update_xaxes(title_text="Start date", range=x_win, row=2, col=1)
 fig.update_layout(height=640, title={"text": f"On {end_day:%d %b %Y}: the NAV of each portfolio and the net, by start date — {len(sel_all):,} starts", "x": 0.02, "font": {"size": 15}},
@@ -189,7 +242,46 @@ st.plotly_chart(fig, width="stretch")
 st.caption(f"Top: the NAV on {end_day:%d %b %Y} of the two portfolios put on at each start date (x axis), one point per selected start, both leaving from {(s.equity - s.loan) / M:,.0f} m on that day. "
            "Earlier starts have been held longer, so the level falls along the axis; read the two lines against each other. Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation "
            "ends ahead and red where it ends behind. Dotted lines: the market peaks (a start there is bought at the top); dashed lines: the bottoms (a start there is bought at the low). "
-           "Gaps: starts outside the selected years or excluded by the checkbox. The zoom slider above sets the window of start dates. The table below gives the distribution of the same values as annualised returns.")
+           "Gaps: starts outside the selected years or excluded by the checkboxes. The zoom slider above sets the window of start dates; the two labels mark the lowest NAV of each portfolio inside it, "
+           "with the other portfolio's NAV on that same start. The table below gives the distribution of the same values as annualised returns.")
+
+# ---------------- dry powder on the end day by start date: Keep's room before a margin call and its LTV, Rotate's dry powder, the net on the same start
+st.subheader(f"Dry powder on {end_day:%d %b %Y} by start date")
+dp_a = (rs["A: headroom end"] / M).where(rs.index.isin(sel_all))
+dp_b = (rs["B: dry powder end"] / M).where(rs.index.isin(sel_all))
+ltv_pct = (rs["end: loan A"] / (s.lv_equity * rs["end: equity A"]) * 100.0).where(rs.index.isin(sel_all))   # Keep's LTV = loan ÷ lending value, %; the margin call is at 100
+net_dp = dp_b - dp_a
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{}]])
+fig.add_trace(go.Scatter(x=rs.index, y=dp_a, name=f"{A}: room before a margin call", line={"color": RED, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=dp_b, name=f"{B}: dry powder", line={"color": BLUE, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=ltv_pct, name=f"{A}: LTV (right axis; yellow far from a margin call, orange close to it)", mode="markers",
+                         marker={"size": 4, "color": ltv_pct, "colorscale": [[0.0, LIGHT_YELLOW], [1.0, ORANGE]], "cmin": 0.0, "cmax": 100.0, "showscale": True,
+                                 "colorbar": {"title": {"text": "LTV"}, "ticksuffix": " %", "thickness": 10, "len": 0.5, "y": 0.78}},
+                         hovertemplate="start %{x|%d %b %Y}<br>Keep the loan: LTV %{y:.0f} %<extra></extra>"), row=1, col=1, secondary_y=True)
+fig.add_hline(y=100.0, line={"color": ORANGE, "width": 1, "dash": "dot"}, annotation={"text": "margin call (LTV 100 %)", "font": {"size": 10, "color": ORANGE}}, annotation_position="top left",
+              row=1, col=1, secondary_y=True)
+fig.add_trace(go.Scatter(x=rs.index, y=net_dp.clip(lower=0.0), name="rotation has more", fill="tozeroy", mode="none", fillcolor="rgba(11, 42, 111, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=net_dp.clip(upper=0.0), name="rotation has less", fill="tozeroy", mode="none", fillcolor="rgba(192, 0, 0, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
+fig.add_trace(go.Scatter(x=rs.index, y=net_dp, name=f"net dry powder: {B} − {A}", line={"color": "#333333", "width": 1.2}, connectgaps=False, hovertemplate=hov), row=2, col=1)
+mark_corrections(fig)
+mark_lowest(fig, dp_a, dp_b, A, B, RED, -45)
+mark_lowest(fig, dp_b, dp_a, B, A, BLUE, -85)
+dp_win = pd.concat([dp_a[in_win], dp_b[in_win]])
+net_dp_win = net_dp[in_win]
+fig.update_yaxes(title_text="dry powder (USD m)", rangemode="tozero", range=[0, float(dp_win.max()) * 1.05] if dp_win.notna().any() else None, row=1, col=1, secondary_y=False)
+fig.update_yaxes(title_text="LTV of the loan portfolio", range=[0, 110], ticksuffix=" %", showgrid=False, row=1, col=1, secondary_y=True)
+fig.update_yaxes(title_text="net (USD m)", zeroline=True, zerolinecolor=GREY,
+                 range=[min(float(net_dp_win.min()), 0.0) * 1.1 - 1.0, max(float(net_dp_win.max()), 0.0) * 1.1 + 1.0] if net_dp_win.notna().any() else None, row=2, col=1)
+fig.update_xaxes(range=x_win, row=1, col=1)
+fig.update_xaxes(title_text="Start date", range=x_win, row=2, col=1)
+fig.update_layout(height=640, title={"text": f"On {end_day:%d %b %Y}: the dry powder of each portfolio and the net, by start date — {len(sel_all):,} starts", "x": 0.02, "font": {"size": 15}},
+                  **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": {"l": 40, "r": 20, "t": 30, "b": 40}})
+st.plotly_chart(fig, width="stretch")
+st.caption(f"Top: on {end_day:%d %b %Y}, for each start date, the room before a margin call of the loan portfolio ({s.lv_equity:.0%} × SPX − loan, red) and the dry powder of the rotation "
+           f"({s.lv_equity:.0%} × SPX + {s.lv_calls:.0%} × calls + {s.lv_cash:.0%} × T-bills − loan, blue), both in USD m; the dots are the loan portfolio's LTV = loan ÷ lending value on the right axis, "
+           "yellow far from a margin call and orange close to it (the call comes at 100 %, the dotted line; the further SPX fall to it is 1 − LTV). "
+           "Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation has more dry powder and red where it has less. "
+           "Dotted vertical lines: the market peaks; dashed: the bottoms. Same selection and zoom window as the NAV chart above; the labels mark each portfolio's lowest dry powder inside the window with the other's on that start.")
 
 # ---------------- statistics of the final NAV over the selected starts (every start of the selected years, not subsampled)
 nav0 = (s.equity - s.loan) / M
@@ -238,38 +330,43 @@ def show(rows: list[list[str]]) -> pd.DataFrame:
     return df
 
 
+sel_year = sel_all[(rs.loc[sel_all, "years"] >= 1.0).to_numpy()]   # annualising a few weeks of noise is meaningless: the annualised figures use the starts held at least a year
+n_young = len(sel_all) - len(sel_year)
 st.subheader(f"On {end_day:%d %b %Y}: the {len(sel_all):,} selected starts" + (" — rotations that stopped buying calls excluded" if excl else ""))
-ann_sel = ann.loc[sel_all]
-show(block("Annualised return to the end day", ann_sel[A], ann_sel[B], cell=lambda x: f"{x:+.1%}", delta=lambda d: f"{d * 100:+.1f} pp"))
-ratio = fin[B] / fin[A] - 1.0
+ann_sel = ann.loc[sel_year]
+show(block("Annualised return to the end day" + (f" ({len(sel_year):,} starts held at least a year)" if n_young else ""), ann_sel[A], ann_sel[B], cell=lambda x: f"{x:+.1%}", delta=lambda d: f"{d * 100:+.1f} pp"))
+ratio = (fin[B] / fin[A] - 1.0).loc[sel_year]
 n_excl = int(some_lapsed.loc[rs.index[[d.year in sel_years for d in rs.index]]].sum())
 note = (f"- The {n_excl:,} starts whose rotation let a call lapse are excluded (both portfolios): a selection on the outcome, which removes the rotation's bad cases but none of the loan's.\n"
         if excl else "")
-st.markdown(f"- Annualised return = (NAV on the end day ÷ {nav0:,.0f} m)^(1 / years held) − 1, comparable across starts whatever their holding period. "
+young_note = f"; the {n_young:,} starts held less than a year are left out of this block (a few weeks of noise annualised would swamp the lowest and highest rows). " if n_young else ". "
+st.markdown(f"- Annualised return = (NAV on the end day ÷ {nav0:,.0f} m)^(1 / years held) − 1, comparable across starts whatever their holding period{young_note}"
             f"Keep and Rotate: each portfolio's own distribution over the starts; Δ = Rotate − Keep on each row (lowest vs lowest, median vs median — usually different start dates); "
             f"'rotation ahead on' compares each start with itself.\n{note}"
-            f"- Same start, same end: the rotation ends **ahead on {float((ratio > 0).mean()):.0%}** of the selected starts; its final NAV relative to keeping the loan: median **{ratio.median():+.1%}**, "
+            f"- Same start, same end: the rotation ends **ahead on {float((ratio > 0).mean()):.0%}** of these starts; its final NAV relative to keeping the loan: median **{ratio.median():+.1%}**, "
             f"5th–95th percentile {ratio.quantile(0.05):+.1%} to {ratio.quantile(0.95):+.1%}, worst {ratio.min():+.1%} ({ratio.idxmin():%d %b %Y} start), best {ratio.max():+.1%} ({ratio.idxmax():%d %b %Y} start).\n"
             f"- Consecutive starts overlap almost entirely: the percentiles are the range of history, not probabilities.")
 
 # ---------------- the market bottoms: one tab per bottom
-st.subheader("At each market bottom")
+st.subheader("At each market bottom" if not at_bottom else f"At {end_label.split(' (')[0]}")
+corr_shown = corr if not at_bottom else corr[corr["trough"] == end_day]   # held to today: every bottom; held to a bottom: that one only
 shown = [(lab, r, [c for c in sel_all if c in paths["nav_A"].columns and pd.notna(paths["nav_A"].loc[r.trough, c])])
-         for lab, r in zip(corr.index, corr.itertuples(), strict=True) if r.trough <= end_day and r.trough in paths["nav_A"].index]
+         for lab, r in zip(corr_shown.index, corr_shown.itertuples(), strict=True) if r.trough <= end_day and r.trough in paths["nav_A"].index]
 shown = [(lab, r, alive) for lab, r, alive in shown if alive]
 alive_at = {lab: alive for lab, _, alive in shown}
 
 
-lowest = {k: [paths[k].loc[corr.loc[lab, "trough"], alive_at[lab]].min() / M if lab in alive_at else np.nan for lab in corr.index] for k in ("nav_A", "nav_B")}
+lowest = {k: [paths[k].loc[corr_shown.loc[lab, "trough"], alive_at[lab]].min() / M if lab in alive_at else np.nan for lab in corr_shown.index] for k in ("nav_A", "nav_B")}
 bottoms = pd.DataFrame({
-    "Correction": corr.index, "Previous peak": [d.date() for d in corr["peak"]], "SPX at the peak": corr["peak level"].to_numpy(),
-    "Bottom": [d.date() for d in corr["trough"]], "SPX at the bottom": corr["trough level"].to_numpy(), "Fall": corr["drawdown"].to_numpy(),
-    "Back to the peak": [d.date() if pd.notna(d) else "not yet" for d in corr["recovered"]],
+    "Correction": corr_shown.index, "Previous peak": [d.date() for d in corr_shown["peak"]], "SPX at the peak": corr_shown["peak level"].to_numpy(),
+    "Bottom": [d.date() for d in corr_shown["trough"]], "SPX at the bottom": corr_shown["trough level"].to_numpy(), "Fall": corr_shown["drawdown"].to_numpy(),
+    "Back to the peak": [d.date() if pd.notna(d) else "not yet" for d in corr_shown["recovered"]],
     f"Lowest NAV, {A}": lowest["nav_A"], f"Lowest NAV, {B}": lowest["nav_B"],
 })
 st.dataframe(bottoms.style.format("{:,.0f}", subset=["SPX at the peak", "SPX at the bottom"]).format("{:+.0%}", subset=["Fall"]).format("{:,.0f} m", subset=[f"Lowest NAV, {A}", f"Lowest NAV, {B}"], na_rep="—"),
              width="stretch", hide_index=True, height=table_height(len(bottoms)))
-st.caption("Falls of 20 % or more in the SPX price index since 1997: the day of the previous peak, the lowest close, and the day the index regained the peak. The bottoms are the dashed lines on the charts above. "
+st.caption(("Falls of 20 % or more in the SPX price index since 1997" if not at_bottom else "The correction chosen in *Held until* (held to today, the table lists all four)")
+           + ": the day of the previous peak, the lowest close, and the day the index regained the peak. The bottoms are the dashed lines on the charts above. "
            "Lowest NAV: on the bottom day, the lowest NAV of each portfolio over the selected starts running that day (usually different start dates; both portfolios reach their low of the correction on that day); "
            "— when no selected start was running. "
            "One tab per bottom below: the worst trajectory in detail (the lowest NAV that day in either portfolio, both strategies read on that same start) and the count of starts on which "
@@ -290,24 +387,21 @@ def trajectory(w: pd.Timestamp, title: str, same_start: str, at_: dict[str, pd.S
     """One start read on both strategies on the bottom day (``at_``: the path columns on that day, over the starts): a section row, then its
     balance sheet and costs since the start, Δ on every row."""
     v = lambda k: float(at_[k][w]) / M  # noqa: E731
-    lv_a, lv_b = s.lv_equity * v("E_A"), s.lv_equity * v("E_B") + s.lv_calls * v("call_val")
+    lv_a, lv_b = s.lv_equity * v("E_A"), s.lv_equity * v("E_B") + s.lv_calls * v("call_val") + s.lv_cash * v("cash_B")
     n_bought = int(at_["n_bought"][w])   # the build steps done by that day plus every replacement at expiry — fewer than the weekly steps when the bottom came before the rotation was complete
     n_alive = f"{int(at_['n_calls'][w])} call{'s' if at_['n_calls'][w] != 1 else ''} alive of the {n_bought} bought" + (f" so far: {n_bought} of the {s.build} weekly steps done" if n_bought < s.build else "")
-    net = v("premiums_cum_B") - v("payoffs_cum_B")
     return [
         [title, "", "", ""],
         ["started on", f"{w:%d %b %Y}, {vs_peak(w, r)}", same_start, ""],
         ["NAV", f"{v('nav_A'):,.0f} m ({v('nav_A') / nav0 - 1:+.0%} from the start)", f"{v('nav_B'):,.0f} m ({v('nav_B') / nav0 - 1:+.0%} from the start)", pm(v("nav_B") - v("nav_A"))],
         ["SPX held, market value", f"{v('E_A'):,.0f} m", f"{v('E_B'):,.0f} m", pm(v("E_B") - v("E_A"))],
+        ["T-bills (cash)", "—", f"{v('cash_B'):,.0f} m", pm(v("cash_B"))],
         ["calls held, market value", "—", f"{v('call_val'):,.0f} m ({n_alive}, on a notional of {v('call_notional'):,.0f} m of index)", pm(v("call_val"))],
-        ["cash", "—", f"{v('cash_B'):,.0f} m", pm(v("cash_B"))],
         ["loan", f"{v('loan'):,.0f} m", f"{v('loan_B'):,.0f} m" + (" (rotation still under way)" if at_["loan_B"][w] > 0.5e6 else ""), pm(v("loan_B") - v("loan"))],
-        ["lending value of the holdings", f"{lv_a:,.0f} m ({s.lv_equity:.0%} of the SPX)", f"{lv_b:,.0f} m ({s.lv_equity:.0%} of the SPX + {s.lv_calls:.0%} of the calls)", pm(lv_b - lv_a)],
-        ["dry powder = lending value − loan + cash", f"{lv_a:,.0f} − {v('loan'):,.0f} = {v('headroom_A'):,.0f} m (LTV {at_['ltv_A'][w]:.0%}: a further {max(1 - at_['ltv_A'][w], 0):.0%} SPX fall to a margin call)",
-         f"{lv_b:,.0f} − {v('loan_B'):,.0f} + {v('cash_B'):,.0f} = {v('dry_powder_B'):,.0f} m", pm(v("dry_powder_B") - v("headroom_A"))],
-        ["interest paid since the start", f"{v('interest_cum_A'):,.0f} m", f"{v('interest_cum_B'):,.0f} m (during the build)", pm(v("interest_cum_B") - v("interest_cum_A"))],
-        ["premiums paid − payoffs received since the start", "—", f"{v('premiums_cum_B'):,.0f} m − {v('payoffs_cum_B'):,.0f} m = {net:,.0f} m", pm(net)],
-        [f"dividends received since the start (net of {s.wht:.0%} withholding, reinvested in the SPX)", f"{v('div_cum_A'):,.0f} m", f"{v('div_cum_B'):,.0f} m", pm(v("div_cum_B") - v("div_cum_A"))],
+        ["lending value of the holdings", f"{lv_a:,.0f} m ({s.lv_equity:.0%} of the SPX)", f"{lv_b:,.0f} m ({s.lv_equity:.0%} of the SPX + {s.lv_calls:.0%} of the calls + {s.lv_cash:.0%} of the T-bills)", pm(lv_b - lv_a)],
+        ["dry powder = lending value − loan", f"{lv_a:,.0f} − {v('loan'):,.0f} = {v('headroom_A'):,.0f} m (LTV {at_['ltv_A'][w]:.0%}: a further {max(1 - at_['ltv_A'][w], 0):.0%} SPX fall to a margin call)",
+         f"{lv_b:,.0f} − {v('loan_B'):,.0f} = {v('dry_powder_B'):,.0f} m", pm(v("dry_powder_B") - v("headroom_A"))],
+        ["interest cumulated", f"{v('interest_cum_A'):,.0f} m", f"{v('interest_cum_B'):,.0f} m (during the build)", pm(v("interest_cum_B") - v("interest_cum_A"))],
     ]
 
 
@@ -318,7 +412,7 @@ for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d 
     na, nb = paths["nav_A"].loc[r.trough, alive], paths["nav_B"].loc[r.trough, alive]
     wa, wb = na.idxmin(), nb.idxmin()
     st.markdown(f"**{lab} bottom — {r.trough:%d %b %Y}**, SPX {corr.loc[lab, 'trough level']:,.0f}, {r.drawdown:+.0%} from the {r.peak:%d %b %Y} peak; {len(alive):,} starts running that day")
-    at_ = {k: paths[k].loc[r.trough] for k in ("nav_A", "nav_B", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "headroom_A", "dry_powder_B", "ltv_A", "interest_cum_A", "interest_cum_B", "premiums_cum_B", "payoffs_cum_B", "div_cum_A", "div_cum_B")}
+    at_ = {k: paths[k].loc[r.trough] for k in ("nav_A", "nav_B", "E_A", "loan", "E_B", "call_val", "cash_B", "loan_B", "n_calls", "n_bought", "call_notional", "headroom_A", "dry_powder_B", "ltv_A", "interest_cum_A", "interest_cum_B")}
     room_all, dp_all = at_["headroom_A"][alive] / M, at_["dry_powder_B"][alive] / M
     # the lowest NAV that day in either portfolio (usually the last start before the peak), both strategies read on that one start so every Δ is like for like
     w = wa if na.min() <= nb.min() else wb
@@ -327,11 +421,11 @@ for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d 
     rows.append(["rotation has more dry powder on", "", "", f"{int((dp_all > room_all).sum()):,} of {len(alive):,} starts running that day"])
     show(rows)
     st.caption(f"Market values on the bottom day, from the daily simulation of each trajectory. LTV = loan ÷ ({s.lv_equity:.0%} × SPX); the margin call comes when the SPX falls by a further 1 − LTV. "
-               f"Dry powder = the lending value of what is held − loan + cash: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (sidebar, Advanced); the calls are at market value, not notional. "
-               "Worst trajectory: the start with the lowest NAV that day in either portfolio, both strategies read on that same start so every Δ is like for like — its balance sheet and what it had "
-               "cost since the start: the interest capitalised on each loan (Rotate: only while the build was repaying it), and the premiums paid for every call bought less the payoffs received at expiry; "
-               "a positive cost Δ = the rotation had cost more. Dividends: received on the SPX held by each portfolio, net of withholding, and reinvested in the SPX the same day — they are inside "
-               "the SPX market value, never paid out; the interest on the loan is added to the loan, not paid from them. The last row counts the starts (of all those running that day) where the rotation has more dry powder.")
+               f"Dry powder = the lending value of what is held − loan: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (at market value, not notional), {s.lv_cash:.0%} on the T-bills (sidebar, Advanced). "
+               "Worst trajectory: the start with the lowest NAV that day in either portfolio, both strategies read on that same start so every Δ is like for like — its balance sheet and the interest "
+               "capitalised on each loan since the start (Rotate: only while the build was repaying it). The rotation's T-bills are the payoffs of the calls that expired in the money, less the premiums of "
+               "their replacements. Dividends on the SPX are reinvested in the SPX the same day, net of withholding, in both portfolios: they sit inside the SPX market value and never appear as cash; "
+               "the interest on the loan is added to the loan, not paid from them. The last row counts the starts (of all those running that day) where the rotation has more dry powder.")
 
 low = pd.DataFrame({A: rs.loc[sel_all, "A: min headroom"] / M, B: rs.loc[sel_all, "B: min dry powder"] / M})
 st.markdown(f"- Margin calls keeping the loan: **{int(rs.loc[sel_all, 'A: margin call'].sum()):,}** of the {len(sel_all):,} selected starts; the closest was {low[A].min():,.0f} m of room "

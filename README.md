@@ -8,21 +8,25 @@ the money is replaced by a new ATM call on the same index units (paid from the p
 that expires worthless lapses. Historical data only, September 1997 to today.
 
 **The app** — `app/historical_app.py`, two pages, each with its own sidebar (the call tenor and the dividend withholding tax are
-common to both). Page 1's sidebar is the setup above, every number editable (Advanced: withholding tax, what happens to a call that
-expires worthless, what a payoff left after a roll buys, the lending value of the calls, the start-date grid); page 2's sidebar
+common to both). Page 1's sidebar is the setup above, every number editable; the page runs only when its **Launch simulation** button is
+pressed (sidebar, grid, start year and end day), and the button is greyed out until something changes (Advanced: withholding tax, what happens to a call that
+expires worthless, what a payoff left after a roll buys, the lending values of the calls and of the T-bills, the start-date grid); page 2's sidebar
 holds the backtest's inputs (premium, premium mode, strike window, cash leg):
-1. **Any start date since 1997** (`app/views/all_starts.py`): both portfolios put on at every trading day (or week) from
-   9 Sep 1997 to the last start whose calls have expired, each held to the day chosen in *Held until* — today, or one of
-   the market bottoms (Oct 2002, Mar 2009, Mar 2020, Oct 2022). The page shows: the fan of every trajectory (one colour
+1. **Historical simulation** (`app/views/all_starts.py`): both portfolios put on at every trading day (or week) from
+   9 Sep 1997 to a week before the end day, each held to the day chosen in *Held until* — today, or one of the market bottoms (Oct 2002, Mar 2009,
+   Mar 2020, Oct 2022); the starts still rotating on the end day run with the tranches bought so far and are counted; held to today, the starts whose
+   calls have not all expired are counted too (their NAV is a model mark). The page shows: the fan of every trajectory (one colour
    per start year, light to strong, the rotations that stopped buying calls after a correction in yellow to orange) with
    the distribution of the final NAV drawn vertically on the right edge, with a zoom slider; the NAV on the end day by start date — Keep, Rotate and the net Rotate − Keep on the
-   same start, one point per start with the market peaks and bottoms marked; on the end day, the distribution of the annualised return over the selected starts
+   same start, one point per start with the market peaks and bottoms marked and each portfolio's lowest point labelled with the other's value on that start, and the same
+   chart for dry powder (Keep's room before a margin call with its LTV as yellow-to-orange dots on a right axis, Rotate's dry powder, the net); on the end day, the distribution of the annualised return over the selected starts
    (lowest, percentiles, highest; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead on the same start; a checkbox excludes the
    rotations that stopped buying calls from every table); the corrections of 20 % or more in the SPX
    price index (peak, bottom, recovery, the lowest NAV of each portfolio on the bottom day); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —
    the worst trajectory in detail — the start with the lowest NAV that day in either portfolio, both strategies read on that same start with a Δ on every row (when it
-   started and how far from the peak, NAV, SPX, calls at market value with the number alive, cash, loan, lending value, dry
-   powder as lending value − loan + cash, LTV and the further fall to a margin call, the cost since the start on two rows: the interest paid on each loan, and the premiums paid less the payoffs received; the dividends received since the start, net of withholding and reinvested, on each portfolio's SPX) and the number of starts on which the rotation has more dry powder that day; the final value by start date; a CSV download of every start's results. Engine
+   started and how far from the peak, NAV, SPX, T-bills, calls at market value with the number alive, loan, lending value — 75 % of the
+   SPX, 0 % of the calls, 90 % of the T-bills by default — dry powder as lending value − loan, LTV and the further fall to a margin call,
+   the interest cumulated on each loan; dividends are reinvested in the SPX in both portfolios and footnoted) and the number of starts on which the rotation has more dry powder that day; the final value by start date; a CSV download of every start's results. Engine
    `src/fosim/analytics/leverage_stress.py` (`simulate` with the daily accounting identity asserted, `rolling_starts`,
    `rolling_paths` with the bottoms sampled exactly, `corrections`, `starts_table`, `paths_table`), tests
    `tests/test_leverage_stress.py` and `tests/test_app.py` (which cross-checks the bottom tables against direct

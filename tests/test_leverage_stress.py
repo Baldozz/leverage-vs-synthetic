@@ -115,7 +115,9 @@ def test_cash_buffer_is_kept_after_the_rotation(tmp_path: Path) -> None:
     f = _file(tmp_path, np.full(300, 1000.0), base=0.0, tbill=0.0, rate=0.0)
     p, info = simulate("2010-01-04", "2011-02-25", loan0=250 * M, cash_buffer=100 * M, build_tranches=1, file=f)
     assert info.rotation == pytest.approx(350 * M / (1 - info.premium0 / info.delta0))
-    assert p["cash_B"].iloc[0] == 100 * M and p["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] + 100 * M)
+    assert p["cash_B"].iloc[0] == 100 * M and p["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] + 0.9 * 100 * M)   # the T-bills count at their lending value (90 % default)
+    p_full, _ = simulate("2010-01-04", "2011-02-25", loan0=250 * M, cash_buffer=100 * M, build_tranches=1, ltv_cash=1.0, file=f)
+    assert p_full["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] + 100 * M) and p_full["nav_B"].iloc[0] == pytest.approx(p["nav_B"].iloc[0])   # 100 % = the cash itself; the NAV does not depend on it
     assert p["nav_B"].iloc[0] == pytest.approx(750 * M)   # still NAV-neutral on day one
     with pytest.raises(ValueError):
         simulate("2010-01-04", "2011-02-25", cash_buffer=-1.0, build_tranches=1, file=f)
@@ -172,11 +174,11 @@ def test_rolling_paths_match_the_single_paths(tmp_path: Path) -> None:
     rng = np.random.default_rng(11)
     spx = 1000.0 * np.exp(np.cumsum(rng.normal(0.0001, 0.01, n)))
     f = _file(tmp_path, spx)
-    starts = pd.DatetimeIndex(["2010-06-01", "2012-03-15", "2017-12-10"])
+    starts = pd.DatetimeIndex(["2010-06-01", "2012-03-15", "2017-12-26"])
     rows, paths = rolling_paths(starts, "2017-12-29", columns=("headroom_A", "dry_powder_B"), sample="M", build_tranches=1, file=f)
     rs = rolling_starts(starts, 5.0, build_tranches=1, file=f, until="2017-12-29")
     pd.testing.assert_frame_equal(rows, rs)   # the same summary rows
-    assert set(paths) == {"headroom_A", "dry_powder_B"} and list(paths["headroom_A"].columns) == list(rows.index) == [starts[0], starts[1]]   # the Dec-2017 start is less than 30 days before the end
+    assert set(paths) == {"headroom_A", "dry_powder_B"} and list(paths["headroom_A"].columns) == list(rows.index) == [starts[0], starts[1]]   # the 26 Dec 2017 start is less than a week before the end
     for c in ("headroom_A", "dry_powder_B"):
         w = paths[c]
         assert w.index.is_monotonic_increasing and w.index[-1] == pd.Timestamp("2017-12-29") and (w.index[:-1] == w.index[:-1] + pd.offsets.MonthEnd(0)).all()   # month-ends, then the last day
@@ -187,8 +189,13 @@ def test_rolling_paths_match_the_single_paths(tmp_path: Path) -> None:
             me.index = me.index.to_timestamp(how="end").normalize()
             assert np.allclose(w[s].loc[me.index[:-1]], me.iloc[:-1])
     assert rows.loc[starts[0], "A: headroom end"] == paths["headroom_A"][starts[0]].iloc[-1] and rows.loc[starts[0], "B: dry powder end"] == paths["dry_powder_B"][starts[0]].iloc[-1]
-    e_rows, e_paths = rolling_paths(pd.DatetimeIndex(["2017-12-10"]), "2017-12-29", build_tranches=1, file=f)
+    e_rows, e_paths = rolling_paths(pd.DatetimeIndex(["2017-12-26"]), "2017-12-29", build_tranches=1, file=f)
     assert e_rows.empty and all(v.empty for v in e_paths.values())
+    # a start whose 52-week rotation is still under way at the end day runs with the steps taken so far: 10 weeks → 10 tranches, loan partly repaid, identity intact
+    p10, i10 = simulate("2017-10-20", "2017-12-29", build_tranches=52, file=f)
+    assert len(i10.builds) == 10 and 0 < p10["loan_B"].iloc[-1] < 250 * M and p10["n_bought"].iloc[-1] == 10 and i10.build_end == pd.Timestamp("2017-12-22")
+    assert p10["loan_B"].iloc[-1] == pytest.approx(p10["loan_B"].iloc[0] * 0.0 + 250 * M * (42 / 52) * (p10["loan_B"].iloc[-1] / (250 * M * 42 / 52)), rel=1e-12)   # 42 of 52 shares of the loan still outstanding (plus its interest)
+    assert rolling_starts(pd.DatetimeIndex(["2017-10-20"]), 5.0, build_tranches=52, file=f, until="2017-12-29")["end: loan B"].iloc[0] == p10["loan_B"].iloc[-1]
     marks = (pd.Timestamp("2013-06-12"), pd.Timestamp("2009-01-05"))   # a trading day inside both paths, and one before every start (ignored)
     _, mp = rolling_paths(starts[:2], "2017-12-29", columns=("headroom_A",), mark_days=marks, build_tranches=1, file=f)
     w = mp["headroom_A"]
@@ -200,7 +207,7 @@ def test_rolling_paths_match_the_single_paths(tmp_path: Path) -> None:
 
 def test_input_validation(tmp_path: Path) -> None:
     f = _file(tmp_path, np.full(50, 1000.0))
-    for kw in ({"equity0": 0.0}, {"ltv_equity": 1.5}, {"surplus": "gold"}, {"tenor": 0.0}, {"build_tranches": 0}):
+    for kw in ({"equity0": 0.0}, {"ltv_equity": 1.5}, {"ltv_cash": 1.5}, {"surplus": "gold"}, {"tenor": 0.0}, {"build_tranches": 0}):
         with pytest.raises(ValueError):
             simulate("2010-01-04", "2010-03-01", file=f, **kw)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
@@ -352,11 +359,12 @@ def test_cumulative_cost_columns_match_the_summary() -> None:
     assert p["n_bought"].iloc[0] == 1 and p.loc[info.build_end, "n_bought"] == 52 == len(info.builds) and p["n_bought"].iloc[-1] == 52 + sum(1 for r in info.rolls if r.premium_paid > 0.0)
     assert (p["n_calls"] <= p["n_bought"]).all() and p.loc[: info.build_end, "n_calls"].equals(p.loc[: info.build_end, "n_bought"])
     # the cash of the rotation is the payoffs of the calls that expired in the money, less the premiums of their replacements, plus T-bill interest;
-    # it counts at 100 % in the dry powder (SPX at 75 %, the calls at 0 %) and in the NAV
+    # it counts at its lending value in the dry powder (T-bills 90 % by default, SPX 75 %, the calls 0 %) and at 100 % in the NAV
     first_itm = next(r.date for r in info.rolls if r.payoff > 0.0)
     assert (p.loc[: first_itm, "cash_B"].iloc[:-1] == 0.0).all() and p.loc[first_itm, "cash_B"] > 0.0 and (p.loc[first_itm:, "cash_B"] > 0.0).all()
     assert p["cash_B"].iloc[-1] == pytest.approx(sum(r.payoff - r.premium_paid + r.equity_sold for r in info.rolls) + p["cash_int_B"].sum())
-    assert np.allclose(p["dry_powder_B"], 0.75 * p["E_B"] + 0.0 * p["call_val"] - p["loan_B"] + p["cash_B"]) and (p["dry_powder_B"] - 0.75 * p["E_B"]).iloc[-1] == pytest.approx(p["cash_B"].iloc[-1])
+    assert np.allclose(p["dry_powder_B"], 0.75 * p["E_B"] + 0.0 * p["call_val"] + 0.9 * p["cash_B"] - p["loan_B"]) and (p["dry_powder_B"] - 0.75 * p["E_B"]).iloc[-1] == pytest.approx(0.9 * p["cash_B"].iloc[-1])
+    assert np.allclose(p["cap_B"], 0.75 * p["E_B"] + 0.9 * p["cash_B"])
     assert np.allclose(p["nav_B"], p["E_B"] + p["call_val"] + p["cash_B"] - p["loan_B"])
     # dividends: received on the SPX held, net of withholding, reinvested the same day — never paid out, never used for the interest (which is capitalised).
     # Each day's dividend = the SPX value less what the price move alone would have given; over the path they reconcile with the total return exactly.

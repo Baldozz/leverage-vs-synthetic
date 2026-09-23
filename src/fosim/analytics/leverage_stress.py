@@ -14,8 +14,8 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
                   at expiry the payoff is cashed; a call that ends in the money is replaced by a new ATM call on the same
                   index units, paid from the payoff, then cash, then by selling equity (payoff left over: T-bills, equity
                   or more calls); a call that expires worthless lapses (nothing to reinvest) unless ``replace_worthless``
-                  dry powder_B = capacity_B + cash (an optional cash buffer can be kept at t₀)
-                  capacity_B = ℓ_E · E_B + ℓ_C · call value   (the lending value; no loan)
+                  dry powder_B = capacity_B − loan_B (an optional cash buffer can be kept at t₀)
+                  capacity_B = ℓ_E · E_B + ℓ_C · call value + ℓ_T · cash   (the lending value of what is held; the cash is in T-bills)
 
 NAV_A = E_A − L, NAV_B = E_B + call value + cash. The accounting identity ΔNAV = market P&L − interest (+ cash
 interest) is asserted every day for both. c₀ and the roll premiums come from the tenor's Treasury / implied-vol
@@ -103,7 +103,7 @@ def _nearest_index(dates: np.ndarray, target: np.datetime64) -> int:
 
 def simulate(
     start: str | pd.Timestamp, end: str | pd.Timestamp, equity0: float = 1000e6, loan0: float = 250e6, spread: float = 0.0075,
-    ltv_equity: float = 0.75, ltv_call: float = 0.0, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
+    ltv_equity: float = 0.75, ltv_call: float = 0.0, ltv_cash: float = 0.90, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
     surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = False,
     file: Path | str | None = None,
 ) -> tuple[pd.DataFrame, StressInfo]:
@@ -121,8 +121,8 @@ def simulate(
     """
     if equity0 <= 0 or loan0 < 0 or tenor <= 0 or cash_buffer < 0:
         raise ValueError("equity0 and tenor must be positive, loan0 and cash_buffer non-negative")
-    if not 0.0 < ltv_equity <= 1.0 or not 0.0 <= ltv_call <= 1.0 or not 0.0 <= wht < 1.0:
-        raise ValueError("ltv_equity in (0, 1], ltv_call in [0, 1], wht in [0, 1)")
+    if not 0.0 < ltv_equity <= 1.0 or not 0.0 <= ltv_call <= 1.0 or not 0.0 <= ltv_cash <= 1.0 or not 0.0 <= wht < 1.0:
+        raise ValueError("ltv_equity in (0, 1], ltv_call and ltv_cash in [0, 1], wht in [0, 1)")
     if delta is not None and not 0.0 < delta <= 1.0:
         raise ValueError("delta must be in (0, 1] or None for the model delta")
     if int(build_tranches) < 1:
@@ -163,9 +163,10 @@ def simulate(
     # ---- B: the rotation, built in ``build_tranches`` equal steps a week apart (1 = one shot at t₀); the loan is repaid step by step
     months = round(tenor * 12)
     n_tr = int(build_tranches)
-    build_days = [0] + [_nearest_index(dates, dates[0] + np.timedelta64(7 * w, "D")) for w in range(1, n_tr)]
-    if len(set(build_days)) != n_tr or (n_tr > 1 and build_days[-1] >= n - 1):
-        raise ValueError("the build schedule does not fit the path (need distinct trading days a week apart, all before the end)")
+    # one step a week; the steps whose day falls on or after the last day of the path are not taken (a rotation still under way at the end)
+    build_days = [0] + [k for w in range(1, n_tr) if (k := _nearest_index(dates, dates[0] + np.timedelta64(7 * w, "D"))) < n - 1]
+    if len(set(build_days)) != len(build_days):
+        raise ValueError("the build schedule does not fit the path (need distinct trading days a week apart)")
 
     def expiry_of(k: int) -> tuple[np.datetime64, int]:
         """Calendar expiry of a call bought on day k and the index of the nearest trading day (−1 when beyond the data)."""
@@ -311,11 +312,11 @@ def simulate(
             raise AccountingIdentityError(f"setup {name}, {pd.Timestamp(dates[k]).date()}: ΔNAV − P&L = {gap[k - 1]:.3e} USD")
 
     drawdown = tr / np.maximum.accumulate(tr) - 1.0
-    lv_B = ltv_equity * E_B + ltv_call * call_val
+    lv_B = ltv_equity * E_B + ltv_call * call_val + ltv_cash * cash_B   # the lending value of what B holds: SPX, calls, T-bills
     out = pd.DataFrame({
         "spx_tr": tr, "spxfp": S, "drawdown": drawdown, "loan_rate": base + spread,
         "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
-        "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr + cash_B, "nav_B": nav_B,
+        "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr, "nav_B": nav_B,
         "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
         "n_bought": np.cumsum(bought_day),   # tranches bought to each day: the build steps done so far, plus every replacement at expiry
         "interest_cum_A": np.cumsum(interest), "interest_cum_B": np.cumsum(interest_B), "premiums_cum_B": np.cumsum(prem_day), "payoffs_cum_B": np.cumsum(pay_day),   # costs since the start, to each day
@@ -330,18 +331,17 @@ def simulate(
 def _iter_starts(starts: list[pd.Timestamp] | pd.DatetimeIndex, horizon_years: float, file: Path | str | None, until: pd.Timestamp | str | None,
                  progress: Callable[[int, int], None] | None, kw: dict[str, object]) -> Iterator[tuple[pd.DataFrame, StressInfo]]:
     """One simulation per start date: run for ``horizon_years`` (windows ending beyond the data are skipped) or, with ``until``, from each
-    start to that date (starts whose build cannot be complete 30 days before it are skipped)."""
+    start to that date (starts less than a week before it are skipped; a start whose rotation is still under way at that date runs with
+    the build steps taken so far)."""
     full = _load(str(file or DAILY_FILE))
     last = full.date.iloc[-1]
-    n_build = kw.get("build_tranches", 52)
-    build_days = 7 * (int(n_build if isinstance(n_build, int | float) else 52) - 1)   # the build must be complete ≥ 30 days before the end
     all_starts = pd.DatetimeIndex(starts)
     for i, s in enumerate(all_starts):
         if progress is not None and (i % 25 == 0 or i == len(all_starts) - 1):
             progress(i + 1, len(all_starts))
         if until is not None:
             e = min(pd.Timestamp(until), last)
-            if s > e - pd.Timedelta(30 + build_days, unit="D"):
+            if s > e - pd.DateOffset(days=7):
                 continue
         else:
             e = s + pd.DateOffset(months=round(horizon_years * 12))

@@ -120,7 +120,7 @@ anyway. This is the main policy decision left to review.
 A browser app with two pages. Every input can be changed: size, loan, spread, lending values, call tenor, build pace,
 withholding tax, what happens to worthless calls and to payoffs left after a roll, and daily or weekly start dates.
 
-1. **Any start date since 1997.** The path of every start date, drawn as a fan and coloured by start year. It can be held to
+1. **Historical simulation.** The path of every start date since 1997, drawn as a fan and coloured by start year. It can be held to
    today or to any of the four market bottoms. The page also shows the spread of final values, the corrections table, and
    a table for each market bottom with the worst start's full balance sheet (SPX, calls, cash, loan, LTV, dry powder).
    Results can be downloaded as CSV.

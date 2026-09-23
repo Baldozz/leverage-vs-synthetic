@@ -17,7 +17,7 @@ from common import premium_sidebar, sidebar_setup
 
 st.set_page_config(page_title="Keep the loan or rotate into calls", layout="wide")
 pg = st.navigation([
-    st.Page("views/all_starts.py", title="Any start date since 1997", default=True),
+    st.Page("views/all_starts.py", title="Historical simulation", default=True),
     st.Page("views/premium_history.py", title="Call premium history"),
 ])
 if pg.title == "Call premium history":   # each page has its own sidebar; the call tenor and the withholding tax are common to both

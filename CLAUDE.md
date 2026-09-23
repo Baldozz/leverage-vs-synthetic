@@ -51,7 +51,7 @@ Any decision rule at step k may read only market state at indices ≤ k. `Market
 - `.venv/bin/python -m pytest` — full suite (must be green before any stage is declared done).
 - `.venv/bin/ruff check . && .venv/bin/mypy` — must be clean for `src/fosim` and `validation/`.
 - `.venv/bin/python -m fosim.reporting.validation_report` — regenerates `reports/validation_report.html`.
-- `.venv/bin/streamlit run app/historical_app.py` — the decision app (two pages: "Any start date since 1997", "Call premium history"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
+- `.venv/bin/streamlit run app/historical_app.py` — the decision app (two pages: "Historical simulation", "Call premium history"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
 - `.venv/bin/python scripts/export_trajectories.py [--grid daily] [--sample W]` — every start's trajectory to a long CSV under `reports/` (generated, not committed).
 - Page tests use Streamlit's AppTest on the weekly grid (`at.session_state["s_grid"] = "every week"`); the bottom tables are cross-checked against direct `simulate()` runs — keep that check when the layout changes.
 - The engine module is imported once by the running server: restart it after changing `leverage_stress.py` (page files reload on save).
