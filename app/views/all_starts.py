@@ -87,8 +87,11 @@ st.caption(f"The same two portfolios put on at every {'trading day' if freq == '
            + ("; a call that expires worthless lapses." if not s.replace_worthless else "; a worthless call is replaced too."))
 if s.roll == "target" and s.rebalance != "none":
     n_up, n_down, n_part = int(rs["B: rebalances up"].sum()), int(rs["B: rebalances down"].sum()), int(rs["B: partial rebalances"].sum())
+    below_note = {"calls": "ATM calls bought from the T-bills", "spx": "SPX bought from the T-bills",
+                  "calls_spx": f"ATM calls bought from the T-bills, then from SPX sold for them — {rs['B: SPX sold at rebalances'].sum() / M:,.0f} m of SPX sold in all"}[s.below]
+    ran_out = "the T-bills and the SPX ran out" if s.below == "calls_spx" else "the T-bills ran out"
     st.caption(f"Band trades across the {len(rs):,} starts: **{n_up:,} up** (calls sold, most in the money first, at the mark less {s.haircut * 100:g} vol point{'s' if s.haircut != 0.01 else ''}), "
-               f"**{n_down:,} down** ({'ATM calls' if s.below == 'calls' else 'SPX'} bought from the T-bills), **{n_part:,} partial** (the T-bills ran out); "
+               f"**{n_down:,} down** ({below_note}), **{n_part:,} partial** ({ran_out}); "
                f"unwind cost {rs['B: unwind cost'].sum() / M:,.0f} m in all, {rs['B: rolls skipped'].sum():,} expiries with nothing to buy (exposure already at Keep's).")
 years = rs["years"]
 ann = pd.DataFrame({A: (1.0 + rs["A return"]) ** (1.0 / years) - 1.0, B: (1.0 + rs["B return"]) ** (1.0 / years) - 1.0}, index=rs.index)

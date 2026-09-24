@@ -45,7 +45,7 @@ REQUIRED = ("date", "spxfp", "spx_px_last", "spx_div_yld", "loan_base", "tbill_3
 SURPLUS_POLICIES = ("cash", "equity", "calls")
 ROLL_RULES = ("target", "delta", "units")   # what an expiring call is replaced on: Keep's exposure (the gap to it), the same dollar delta, the same index units
 REBALANCE = ("none", "monthly", "quarterly")   # when the rotation's exposure is checked against the band (target rule only)
-BELOW = ("calls", "spx")                       # what is bought from the T-bills when the exposure is below the band
+BELOW = ("calls", "spx", "calls_spx")          # below the band: ATM calls from the T-bills, SPX from the T-bills, or calls from the T-bills then from SPX sold for them
 TOL = 1e-6
 
 
@@ -163,7 +163,9 @@ def simulate(
     build, if the live exposure is above (1 + band) × E_A the excess is sold from the calls, most in the money first (highest S/K, then
     the earliest expiry), partial tranches allowed, at the model mark with ``unwind_haircut`` (vol points, fraction) taken off the vol,
     proceeds to T-bills, mark − sale booked as ``unwind_cost_B``; if it is below (1 − band) × E_A the shortfall is bought from the
-    T-bills — ATM calls of the tenor (``below="calls"``, default) or SPX (``"spx"``) — as far as the T-bills go (``Trade.partial``).
+    T-bills — ATM calls of the tenor (``below="calls"``, default) or SPX (``"spx"``) — as far as the T-bills go (``Trade.partial``);
+    ``"calls_spx"`` goes on when the T-bills run out by selling SPX for calls, s = rest / (δ/c − 1) of SPX for s/c of premium (each
+    dollar switched adds δ/c − 1 of exposure), as far as the SPX goes.
     A roll and a check on the same day: the roll first. Every decision is logged in ``StressInfo.trades``.
     ``cash_buffer``: extra equity rotated at t₀ so that B keeps this much cash after repaying the loan (0 = fully invested).
     ``delta``: the call delta used to size the sleeve (notional = equity sold / delta). ``None`` (default) uses the model delta of
@@ -420,21 +422,26 @@ def simulate(
             return 0.0
         if expo < lo - TOL:                          # below: buy from the T-bills, as far as they go
             shortfall = lo - expo
-            if below == "calls":
+            if below in ("calls", "calls_spx"):
                 c_k, d_k = atm(k)[0], live_delta(k)
                 if c_k / d_k >= 1.0:
                     raise ValueError(f"premium {c_k:.1%} of notional exceeds the delta {d_k:.0%}: the calls cost more than the exposure they replace")
-                wanted = shortfall / d_k
-                notional = min(wanted, cash / c_k)
-                partial = notional < wanted - TOL
+                notional = min(shortfall / d_k, cash / c_k)   # from the T-bills first
+                sold = 0.0
+                rest = shortfall - d_k * notional
+                if below == "calls_spx" and rest > TOL and e_b > TOL:   # then SPX sold for calls: each dollar switched into premium adds δ/c − 1 of exposure
+                    sold = min(rest / (d_k / c_k - 1.0), e_b)
+                    notional += sold / c_k
+                    eq_units = 0.0 if sold >= e_b else eq_units - sold / tr[k]
+                partial = d_k * notional - sold < shortfall - TOL
                 if notional <= TOL:
                     trades.append(Trade(date, "rebalance_down", expo, expo, target, lo, 0.0, 0.0, 0.0, c_k, d_k, S[k], pd.Timestamp(expiry_of(k)[0]), True))
                     return 0.0
                 premium = c_k * notional
-                cash -= premium
+                cash += sold - premium                   # the SPX proceeds pay their share of the premium exactly
                 nt = buy(k, notional, c_k, d_k)
                 after = eq_units * tr[k] + deltas[k]
-                trades.append(Trade(date, "rebalance_down", expo, after, target, lo, premium, notional, 0.0, c_k, d_k, S[k], pd.Timestamp(nt.exp_date), partial))
+                trades.append(Trade(date, "rebalance_down", expo, after, target, lo, premium, notional, -sold, c_k, d_k, S[k], pd.Timestamp(nt.exp_date), partial))
                 return float(premium)
             usd = min(shortfall, cash)
             partial = usd < shortfall - TOL
@@ -592,7 +599,8 @@ def _start_row(p: pd.DataFrame, info: StressInfo) -> dict[str, object]:
         "B: partial rebalances": len({t.date for t in info.trades if t.partial}),
         "B: calls sold at rebalances": float(sum(t.usd_traded for t in info.trades if t.event == "rebalance_up")),
         "B: calls bought at rebalances": float(sum(t.usd_traded for t in info.trades if t.event == "rebalance_down" and t.notional > 0.0)),
-        "B: SPX bought at rebalances": float(sum(t.spx_usd for t in info.trades if t.event == "rebalance_down")),
+        "B: SPX bought at rebalances": float(sum(max(t.spx_usd, 0.0) for t in info.trades if t.event == "rebalance_down")),
+        "B: SPX sold at rebalances": float(-sum(min(t.spx_usd, 0.0) for t in info.trades if t.event == "rebalance_down")),
         "B: unwind cost": float(p["unwind_cost_B"].sum()), "end: exposure A": float(p["exposure_A"].iloc[-1]), "end: exposure B": float(p["exposure_B"].iloc[-1]),
         "B: trades": info.trades,
         "B: call notional end": float(p["call_notional"].iloc[-1]), "build end": info.build_end,
@@ -699,7 +707,8 @@ def starts_table(rs: pd.DataFrame) -> pd.DataFrame:
         "rolls skipped (exposure already at Keep's)": rs["B: rolls skipped"],
         "rebalances up": rs["B: rebalances up"], "rebalances down": rs["B: rebalances down"], "rebalances partial": rs["B: partial rebalances"],
         "calls sold at rebalances (m)": (rs["B: calls sold at rebalances"] / m).round(1), "calls bought at rebalances (m)": (rs["B: calls bought at rebalances"] / m).round(1),
-        "SPX bought at rebalances (m)": (rs["B: SPX bought at rebalances"] / m).round(1), "unwind cost (m)": (rs["B: unwind cost"] / m).round(2),
+        "SPX bought at rebalances (m)": (rs["B: SPX bought at rebalances"] / m).round(1), "SPX sold at rebalances (m)": (rs["B: SPX sold at rebalances"] / m).round(1),
+        "unwind cost (m)": (rs["B: unwind cost"] / m).round(2),
         "exposure today: keep the loan (m)": (rs["end: exposure A"] / m).round(1), "exposure today: rotate into calls (m)": (rs["end: exposure B"] / m).round(1),
         "exposure ratio today": (rs["end: exposure B"] / rs["end: exposure A"]).round(4), "calls / NAV today": (rs["end: calls B"] / rs["NAV B end"]).round(4),
     }, index=rs.index)

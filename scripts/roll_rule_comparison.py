@@ -2,8 +2,8 @@
 
     .venv/bin/python scripts/roll_rule_comparison.py            # ≈ 10 minutes: four runs of every weekly start since 1997, held to today
 
-Four rotations against the same loan portfolio — Keep's exposure (the default: 1 vol point off the mark on calls sold early), Keep's
-exposure with no haircut, the same dollar delta, the same index units — with the headline tables of the investor recap (value today,
+Five rotations against the same loan portfolio — Keep's exposure (the default: 1 vol point off the mark on calls sold early), Keep's
+exposure with no haircut, Keep's exposure with SPX sold for calls when the T-bills run out below the band, the same dollar delta, the same index units — with the headline tables of the investor recap (value today,
 the market bottoms) side by side, settled starts (every call expired at least once) apart from the unsettled ones, and the mechanics of
 the target rule (band trades, unwind cost, exposure ratio, the ladder). Default setup otherwise (1 bn SPX, 250 m loan, SOFR + 75 bp,
 75 % / 0 % / 90 % lending values, 5-year calls, 52 weekly steps, 15 % withholding).
@@ -32,6 +32,7 @@ M = 1e6
 RULES: dict[str, dict[str, object]] = {
     "Keep's exposure (1 vol pt)": {"roll": "target"},
     "Keep's exposure (no haircut)": {"roll": "target", "unwind_haircut": 0.0},
+    "Keep's exposure (SPX sold below the band)": {"roll": "target", "below": "calls_spx"},
     "Same dollar delta": {"roll": "delta"},
     "Same index units": {"roll": "units"},
 }
@@ -70,7 +71,7 @@ def main() -> None:
         "# Roll rules compared — every weekly start since 1997, held to today",
         "",
         f"Generated {date.today():%d %B %Y} by `scripts/roll_rule_comparison.py`. {len(starts):,} weekly starts, {starts[0]:%d %b %Y} → {starts[-1]:%d %b %Y}, "
-        f"each held to {last:%d %b %Y}; the same loan portfolio (*Keep the loan*) on every row, the rotation under four roll rules. Default setup otherwise "
+        f"each held to {last:%d %b %Y}; the same loan portfolio (*Keep the loan*) on every row, the rotation under five roll rules. Default setup otherwise "
         "(1 bn SPX, 250 m Lombard loan at SOFR + 75 bp capitalised, lending values 75 % SPX / 0 % calls / 90 % T-bills, 5-year ATM calls on SPXFP, 52 weekly steps, 15 % withholding). "
         f"Settled starts: on or before {settled_cut:%d %b %Y}, so every call has expired at least once; unsettled: later starts, whose NAV today is partly a model mark. "
         "The annualised blocks use the starts held at least a year. USD m unless stated.",
@@ -78,7 +79,7 @@ def main() -> None:
         "**The rules.** *Keep's exposure* (default): at every expiry the replacement closes the gap between Keep's SPX value and what the rotation's holdings were bought "
         "to carry (its SPX plus each surviving call's slot, grown with the index), so each replacement restores its own slot; paid from the payoff and the T-bills, then by "
         "selling SPX; every quarter-end the live exposure (SPX + the calls' dollar delta) is brought back inside "
-        "±10 % of Keep's — calls sold, most in the money first, at the model mark less 1 vol point (or at the mark: *no haircut*), calls bought from the T-bills. "
+        "±10 % of Keep's — calls sold, most in the money first, at the model mark less 1 vol point (or at the mark: *no haircut*), calls bought from the T-bills (*SPX sold below the band*: and, once the T-bills are gone, from SPX sold for them, s = rest ÷ (δ/c − 1)). "
         "*Same dollar delta*: an in-the-money call is replaced by an ATM call with the same dollar delta (about twice the units; the option units double at every "
         "in-the-money expiry). *Same index units*: replaced on the same index units. Under the last two a worthless call is replaced on the same units, SPX is sold "
         "delta-for-delta and no band applies.",
@@ -129,22 +130,23 @@ def main() -> None:
     out += [md_table(hdr, rows), ""]
 
     out += ["## The target rule's mechanics", ""]
-    hdr = ["Per start (median, or total)", *names[:2]]
+    hdr = ["Per start (median, or total)", *names[:3]]
     mech = []
     for lab, col, fmt, how in [("rolls (expiries with a decision)", "rolls", "{:,.0f}", "median"), ("rolls skipped (gap ≤ 0)", "B: rolls skipped", "{:,.0f}", "median"),
                                ("rebalances up (calls sold)", "B: rebalances up", "{:,.0f}", "median"), ("rebalances down (calls bought)", "B: rebalances down", "{:,.0f}", "median"),
                                ("partial rebalances (T-bills short)", "B: partial rebalances", "{:,.0f}", "median"),
                                ("calls sold at rebalances (m)", "B: calls sold at rebalances", "{:,.0f}", "median_m"), ("calls bought at rebalances (m)", "B: calls bought at rebalances", "{:,.0f}", "median_m"),
+                               ("SPX sold at rebalances (m)", "B: SPX sold at rebalances", "{:,.0f}", "median_m"),
                                ("unwind cost (m), median start", "B: unwind cost", "{:,.1f}", "median_m"), ("unwind cost (m), all starts", "B: unwind cost", "{:,.0f}", "sum_m"),
                                ("cut replacements", "B: cut rolls", "{:,.0f}", "sum")]:
         vals = []
-        for n in names[:2]:
+        for n in names[:3]:
             s = runs[n][0][col]
             v = s.median() if how == "median" else s.median() / M if how == "median_m" else s.sum() / M if how == "sum_m" else s.sum()
             vals.append(fmt.format(v))
         mech.append([lab, *vals])
     ratio_rows = []
-    for n in names[:2]:
+    for n in names[:3]:
         r = runs[n][0]["end: exposure B"] / runs[n][0]["end: exposure A"]
         ratio_rows.append(f"{r.quantile(0.05):.2f} / {r.median():.2f} / {r.quantile(0.95):.2f}")
     mech.append(["exposure ÷ Keep's today: 5th / median / 95th pct", *ratio_rows])

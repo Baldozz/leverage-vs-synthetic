@@ -46,7 +46,7 @@ class Setup:
 _SURPLUS = {"kept in T-bills": "cash", "reinvested in SPX": "equity", "reinvested in more calls": "calls"}
 _ROLL = {"Keep's exposure": "target", "the same dollar delta": "delta", "the same index units": "units"}
 _REBALANCE = {"every quarter": "quarterly", "every month": "monthly", "never": "none"}
-_BELOW = {"ATM calls": "calls", "SPX": "spx"}
+_BELOW = {"ATM calls from the T-bills": "calls", "SPX from the T-bills": "spx", "ATM calls, SPX sold for them when the T-bills run out": "calls_spx"}
 
 
 @dataclass(frozen=True)
@@ -85,7 +85,7 @@ def sidebar_setup() -> Setup:
     """Page 1's sidebar: the two portfolios. Drawn by the entry script when that page is shown; read back with ``setup``. The page itself
     runs only what its *Launch simulation* button last launched (the sidebar setup, the grid, the start year and the end day)."""
     for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_weeks", 52), ("s_worthless", "replaced, SPX sold to pay it"), ("s_roll", "Keep's exposure"),
-                 ("s_rebalance", "every quarter"), ("s_band", 10.0), ("s_haircut", 1.0), ("s_below", "ATM calls"),
+                 ("s_rebalance", "every quarter"), ("s_band", 10.0), ("s_haircut", 1.0), ("s_below", "ATM calls from the T-bills"),
                  ("s_surplus", "kept in T-bills"), ("s_lv_calls", 0.0), ("s_lv_cash", 90.0), ("s_grid", "every trading day")):
         _restore(k, v)
     with st.sidebar:
@@ -104,7 +104,7 @@ def sidebar_setup() -> Setup:
             st.radio("Exposure checked against the band", list(_REBALANCE), key="s_rebalance", disabled=not target, help="Keep's exposure only. On the last trading day of the period, after the build: above the band the excess is sold from the calls, the most in the money first, to the band edge; below it the shortfall is bought from the T-bills as far as they go.")
             st.number_input("Band around Keep's exposure (± %)", 0.0, 50.0, step=1.0, key="s_band", disabled=not target)
             st.number_input("Haircut on calls sold early (vol points)", 0.0, 10.0, step=0.5, key="s_haircut", disabled=not target, help="Taken off the implied vol when a call is sold before expiry at a band check: 0 = sold at the model mark. PLACEHOLDER 1 point.")
-            st.radio("Below the band, buy", list(_BELOW), key="s_below", disabled=not target, help="ATM calls of the tenor (about three times the exposure per dollar, the convexity kept) or SPX; either way from the T-bills only.")
+            st.radio("Below the band, buy", list(_BELOW), key="s_below", disabled=not target, help="ATM calls of the tenor (about three times the exposure per dollar, the convexity kept) or SPX, from the T-bills only — the shortfall left when they run out is tolerated until the next check or roll; or calls from the T-bills and then from SPX sold for them (each dollar switched adds delta ÷ premium − 1 of exposure), which keeps the exposure matched through a long fall at the cost of turning stock into options at the low.")
             st.radio("A call that expires worthless is", ["replaced, SPX sold to pay it", "not replaced"], key="s_worthless", help="Replaced: under Keep's exposure by the gap; under the other rules a new ATM call on the same index units, paid from the T-bills then by selling SPX delta-for-delta (the excess over the premium goes to T-bills). Not replaced: the call lapses, nothing is bought, no SPX sold.")
             st.radio("Payoff left after a roll", list(_SURPLUS), key="s_surplus", disabled=target, help="What happens to the part of a payoff not needed for the new call's premium (the same dollar delta and the same index units rules).")
             if target:

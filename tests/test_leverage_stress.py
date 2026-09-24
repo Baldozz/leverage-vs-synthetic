@@ -592,6 +592,30 @@ def test_band_rebalance_down_buys_calls_from_the_t_bills(tmp_path: Path) -> None
     if not s0.partial:
         assert ps["exposure_B"].iloc[ks] == pytest.approx(0.9 * ps["E_A"].iloc[ks], rel=1e-9)
     assert s0.usd_traded < t0.usd_traded * 5   # SPX gives one dollar of exposure per dollar; calls about three
+    # the option that goes on when the T-bills run out: SPX sold for calls, s = rest / (δ/c − 1), so the exposure lands on the edge; NAV-neutral on the day
+    px, ix = simulate("2010-01-04", "2015-12-31", build_tranches=1, rebalance="quarterly", band=0.10, below="calls_spx", file=f)   # no cash buffer: SPX only
+    x0 = next(t for t in ix.trades if t.event == "rebalance_down")
+    kx = px.index.get_loc(x0.date)
+    e_before = px["E_B"].iloc[kx - 1] * down[kx] / down[kx - 1]
+    rest = 0.9 * px["E_A"].iloc[kx] - x0.exposure_before
+    s_x = rest / (x0.delta / x0.price - 1.0)
+    assert x0.spx_usd == pytest.approx(-s_x) and x0.notional == pytest.approx(s_x / x0.price) and x0.usd_traded == pytest.approx(s_x) and not x0.partial
+    assert px["E_B"].iloc[kx] == pytest.approx(e_before - s_x) and px["cash_B"].iloc[kx] == pytest.approx(0.0, abs=1e-6)
+    assert px["exposure_B"].iloc[kx] == pytest.approx(0.9 * px["E_A"].iloc[kx], rel=1e-9) and px["nav_B"].iloc[kx] == pytest.approx(px["nav_B"].iloc[kx - 1] + px["eq_pnl_B"].iloc[kx] + px["call_pnl_B"].iloc[kx])
+    pc_, ic_ = simulate("2010-01-04", "2015-12-31", build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, below="calls_spx", file=f)   # with T-bills: they go first
+    dc = [t for t in ic_.trades if t.event == "rebalance_down"]
+    assert dc[0].spx_usd == 0.0 and dc[0].usd_traded == pytest.approx(t0.usd_traded) and dc[0].notional == pytest.approx(t0.notional)   # same first trade as the T-bills-only rule
+    mixed = next(t for t in dc if t.spx_usd < 0.0)
+    km = pc_.index.get_loc(mixed.date)
+    assert pc_["cash_B"].iloc[km] == pytest.approx(0.0, abs=1e-6) and pc_["exposure_B"].iloc[km] == pytest.approx(0.9 * pc_["E_A"].iloc[km], rel=1e-9) and not mixed.partial
+    assert all(not t.partial for t in dc) and pc_["E_B"].iloc[-1] < p["E_B"].iloc[-1]   # never short of funding while SPX remains; the stock erodes into calls
+    rsx = rolling_starts(pd.DatetimeIndex(["2010-01-04"]), 0.0, build_tranches=1, rebalance="quarterly", band=0.10, below="calls_spx", until="2015-12-31", file=f)
+    assert rsx["B: SPX sold at rebalances"].iloc[0] == pytest.approx(-sum(t.spx_usd for t in ix.trades if t.event == "rebalance_down")) and rsx["B: SPX sold at rebalances"].iloc[0] > 0 and rsx["B: SPX bought at rebalances"].iloc[0] == 0.0
+    assert starts_table(rsx)["SPX sold at rebalances (m)"].iloc[0] == pytest.approx(rsx["B: SPX sold at rebalances"].iloc[0] / M, abs=0.05)
+    # when even all the SPX cannot close the shortfall: every unit sold, flagged partial (a 550 m loan rotated leaves little SPX)
+    pz, iz = simulate("2010-01-04", "2015-12-31", equity0=1000 * M, loan0=550 * M, build_tranches=1, rebalance="quarterly", band=0.10, below="calls_spx", file=f)
+    z = next(t for t in iz.trades if t.event == "rebalance_down" and t.partial)
+    assert pz["E_B"].loc[z.date] == 0.0 and z.exposure_after < z.band_edge and z.spx_usd < 0.0
 
 
 def test_band_check_timing_and_no_trade_cases(tmp_path: Path) -> None:

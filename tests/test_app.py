@@ -49,7 +49,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert len(at.get("plotly_chart")) == 0 and len(at.table) == 0 and any("press **Launch simulation**" in i.value for i in at.info) and not at.button(key="r_launch").proto.disabled
     # the sidebar defaults: Keep's exposure with the quarterly band; the band widgets enabled, the surplus radio greyed out
     assert at.radio(key="s_roll").value == "Keep's exposure" and at.radio(key="s_rebalance").value == "every quarter" and at.number_input(key="s_band").value == 10.0 and at.number_input(key="s_haircut").value == 1.0
-    assert at.radio(key="s_below").value == "ATM calls" and not at.radio(key="s_rebalance").proto.disabled and at.radio(key="s_surplus").proto.disabled and any("Not used under Keep's exposure" in c.value for c in at.caption)
+    assert at.radio(key="s_below").value == "ATM calls from the T-bills" and list(at.radio(key="s_below").options) == ["ATM calls from the T-bills", "SPX from the T-bills", "ATM calls, SPX sold for them when the T-bills run out"] and not at.radio(key="s_rebalance").proto.disabled and at.radio(key="s_surplus").proto.disabled and any("Not used under Keep's exposure" in c.value for c in at.caption)
     # this block runs the same dollar delta rule (the values below were established on it); the default rule is launched further down
     at.radio(key="s_roll").set_value("the same dollar delta").run()
     assert at.radio(key="s_rebalance").proto.disabled and at.number_input(key="s_band").proto.disabled and not at.radio(key="s_surplus").proto.disabled

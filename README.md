@@ -6,7 +6,7 @@ buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so t
 1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. At every expiry the
 replacement closes the gap between Keep's SPX value and the rotation's live exposure (its SPX plus the calls' dollar delta),
 paid from the payoff and the T-bills, then by selling SPX; every quarter-end the exposure is brought back inside ±10 % of
-Keep's (calls sold, most in the money first, at the mark less 1 vol point; calls bought from the T-bills). The earlier rules
+Keep's (calls sold, most in the money first, at the mark less 1 vol point; calls bought from the T-bills, or also from SPX sold for them, option). The earlier rules
 stay in the sidebar: a new call on the same dollar delta (about twice the units) or on the same index units, a worthless call
 replaced (or lapsing), SPX sold delta-for-delta, a replacement nobody can fund cut to what can be. Historical
 data only, September 1997 to today.

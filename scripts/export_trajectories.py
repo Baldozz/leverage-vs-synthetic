@@ -50,7 +50,7 @@ def main() -> None:
     ap.add_argument("--rebalance", choices=["quarterly", "monthly", "none"], default="quarterly", help="target rule: when the exposure is checked against the band")
     ap.add_argument("--band", type=float, default=10.0, help="target rule: the band around Keep's exposure, %%")
     ap.add_argument("--haircut", type=float, default=1.0, help="target rule: vol points taken off the mark on calls sold early")
-    ap.add_argument("--below", choices=["calls", "spx"], default="calls", help="target rule: what is bought from the T-bills below the band")
+    ap.add_argument("--below", choices=["calls", "spx", "calls_spx"], default="calls", help="target rule: below the band buy ATM calls from the T-bills, SPX from the T-bills, or calls from the T-bills then from SPX sold for them")
     ap.add_argument("--worthless", choices=["replace", "lapse"], default="replace", help="a call that expires worthless is replaced, or lapses")
     ap.add_argument("--trade-log", default=None, help="also write the trade log (rolls and band trades of every start) to this CSV")
     ap.add_argument("--out", default=None, help="output CSV (default reports/trajectories_<grid>_<sample>.csv)")
