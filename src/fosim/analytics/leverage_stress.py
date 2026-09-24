@@ -11,17 +11,20 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
                   that day, ≈ 45–55 %), premium c_w · N_w, and the cash x_w − c_w · N_w repays an equal share of the loan
                   then outstanding  ⇒  x_w = (L_w / remaining steps) / (1 − c_w/δ_w); the loan is gone after the last step
                   E_B(t) = (E₀ − x) · TR(t)/TR(t₀);  calls marked daily (BSM, q = r, remaining tenor);
-                  at expiry the payoff is cashed; a call that ends in the money is replaced by a new ATM call carrying the same
-                  dollar delta (``roll="delta"``, default: notional units · S_T / δ_new, the intrinsic exposure units · S_T carried on)
-                  or on the same index units (``roll="units"``), paid from the payoff, then cash, then by selling equity
-                  delta-for-delta (the share of the tranche the SPX pays for gives up δ · its notional of SPX, the excess over the
-                  premium goes to T-bills); the payoff left over: T-bills, equity or more calls. A call that expires worthless is
-                  replaced on the same index units (``replace_worthless=True``, default) or lapses
+                  at expiry the payoff is cashed and the replacement closes the gap between A's exposure E_A and what B's holdings
+                  were bought to carry, E_B + Σ δ_buy · N · TR(t)/TR(buy) (``roll="target"``, default: N = gap/δ from the payoff and
+                  the T-bills, else N = (gap − cash)/(δ − c) with c·N − cash of SPX sold; a gap ≤ 0 buys nothing), and on each
+                  quarter-end after the build the live exposure E_B + Σ units · δ(t) · S is brought back inside ±band of E_A (calls sold, most in the money first, at the mark less the
+                  unwind haircut; calls bought from the T-bills); the earlier rules: a new ATM call on the same dollar delta
+                  (``roll="delta"``: notional units · S_T / δ_new) or on the same index units (``roll="units"``), paid from the
+                  payoff, then cash, then by selling equity delta-for-delta (the share of the tranche the SPX pays for gives up
+                  δ · its notional of SPX, the excess over the premium goes to T-bills); the payoff left over: T-bills, equity or
+                  more calls. A call that expires worthless is replaced (``replace_worthless=True``, default) or lapses
                   dry powder_B = capacity_B − loan_B (an optional cash buffer can be kept at t₀)
                   capacity_B = ℓ_E · E_B + ℓ_C · call value + ℓ_T · cash   (the lending value of what is held; the cash is in T-bills)
 
 NAV_A = E_A − L, NAV_B = E_B + call value + cash. The accounting identity ΔNAV = market P&L − interest (+ cash
-interest) is asserted every day for both. c₀ and the roll premiums come from the tenor's Treasury / implied-vol
+interest − unwind cost on calls sold early) is asserted every day for both. c₀ and the roll premiums come from the tenor's Treasury / implied-vol
 columns (``ust_{n}y`` / ``iv_{n}y``, 5-year fallback reported).
 """
 
@@ -40,7 +43,9 @@ from fosim.pricing.black_scholes import bsm_greeks, bsm_price
 
 REQUIRED = ("date", "spxfp", "spx_px_last", "spx_div_yld", "loan_base", "tbill_3m", "ust_5y", "iv_5y")
 SURPLUS_POLICIES = ("cash", "equity", "calls")
-ROLL_RULES = ("delta", "units")   # what an in-the-money call is replaced on: the same dollar delta, or the same index units
+ROLL_RULES = ("target", "delta", "units")   # what an expiring call is replaced on: Keep's exposure (the gap to it), the same dollar delta, the same index units
+REBALANCE = ("none", "monthly", "quarterly")   # when the rotation's exposure is checked against the band (target rule only)
+BELOW = ("calls", "spx")                       # what is bought from the T-bills when the exposure is below the band
 TOL = 1e-6
 
 
@@ -56,6 +61,28 @@ class Roll:
     premium_paid: float
     equity_sold: float
     cut: bool = False        # the replacement was cut to what the payoff, the T-bills and all the SPX could fund
+    notional: float = 0.0    # call notional bought at the roll
+    skipped: bool = False    # target rule: the exposure was already at or above Keep's, nothing bought (the payoff to T-bills)
+
+
+@dataclass(frozen=True)
+class Trade:
+    """One line of the trade log: a roll decision, or a band rebalance (one line per tranche touched)."""
+    date: pd.Timestamp
+    event: str               # "roll" | "rebalance_up" | "rebalance_down"
+    exposure_before: float   # the rotation's live exposure before the trade, USD
+    exposure_after: float
+    target: float            # Keep's SPX value that day
+    band_edge: float         # the exposure aimed at: the target for a roll, (1 ± band) × target for a rebalance
+    usd_traded: float        # premium paid (roll, rebalance down in calls), proceeds received (rebalance up), SPX bought (rebalance down in SPX)
+    notional: float          # call notional bought (+) or sold (−); 0 for an SPX purchase
+    spx_usd: float           # SPX sold at a roll (−) or bought at a rebalance (+)
+    price: float             # call price per unit of notional (fraction of the strike), or the index level for an SPX purchase
+    delta: float             # of the calls traded (1 for SPX)
+    strike: float            # NaN for SPX
+    expiry: pd.Timestamp     # NaT for SPX
+    partial: bool = False    # rebalance down: the T-bills did not cover the shortfall
+    cut: bool = False        # roll: cut to what all the SPX could fund
 
 
 @dataclass(frozen=True)
@@ -74,6 +101,7 @@ class StressInfo:
     rolls: tuple[Roll, ...]
     builds: tuple[Roll, ...] = ()        # one entry per build step: premium fraction, premium paid, equity sold
     build_end: pd.Timestamp | None = None
+    trades: tuple[Trade, ...] = ()       # the trade log (target rule: every roll decision and band rebalance)
 
     @property
     def fallback(self) -> bool:
@@ -110,19 +138,33 @@ def simulate(
     start: str | pd.Timestamp, end: str | pd.Timestamp, equity0: float = 1000e6, loan0: float = 250e6, spread: float = 0.0075,
     ltv_equity: float = 0.75, ltv_call: float = 0.0, ltv_cash: float = 0.90, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
     surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = True,
-    roll: str = "delta", file: Path | str | None = None,
+    roll: str = "target", rebalance: str = "quarterly", band: float = 0.10, unwind_haircut: float = 0.01, below: str = "calls",
+    file: Path | str | None = None,
 ) -> tuple[pd.DataFrame, StressInfo]:
     """Daily path of both setups from ``start`` to ``end`` (nearest trading days). See the module docstring.
 
     ``surplus``: what B does with payoff cash left after paying the roll premium — ``"cash"`` (T-bills), ``"equity"`` (buy SPX)
     or ``"calls"`` (buy more ATM calls at the same premium fraction, so the whole payoff stays exposed to the index).
-    ``roll``: what a call that expires in the money is replaced on — ``"delta"`` (default): a new ATM call with the same dollar delta as
-    the expiring one (intrinsic, delta 1): notional = units × S_T ÷ δ_new; ``"units"``: the same index units, notional = units × S_T.
-    ``replace_worthless``: a call that expires worthless is replaced on the same index units (``True``, default; its expired exposure
-    is nil, so a delta target would size it at zero), paid from cash then by selling SPX; ``False`` lets it lapse (nothing bought, no SPX sold).
-    SPX sold to fund a replacement is sold delta-for-delta: the share of the tranche the SPX pays for gives up δ × its notional of SPX,
-    the premium is paid out of it and the excess goes to T-bills, so the sale does not change the exposure. When even all the SPX
-    cannot fund the tranche it is cut to what can be funded, N = cash/c + SPX/δ (every unit of SPX sold), and the roll is flagged ``cut``.
+    ``roll``: what an expiring call is replaced on. ``"target"`` (default): the gap between Keep's SPX value E_A and what the rotation's
+    holdings were bought to carry, E_B + Σ δ_buy·N·TR(t)/TR(buy) over the surviving tranches (each call's slot grown with the index like
+    the SPX it replaced, ``exposure_replaced_B``) — notional N = gap/δ paid from the payoff and the T-bills, or, when they do not cover
+    it, N = (gap − cash)/(δ − c) with s = c·N − cash of SPX sold (the replaced exposure after the roll = E_A exactly: each replacement
+    restores its own slot; the live exposure E_B + Σ units·δ(t)·S equals E_A only when no tranche survives, the band check keeps it near);
+    gap ≤ 0 buys nothing (``Roll.skipped``); when not even all the SPX can fund it, N = (cash + E_B)/c and the roll is flagged ``cut``.
+    Several tranches expiring the same day share one gap, split equally. ``"delta"``: an in-the-money call (intrinsic, delta 1) is replaced by
+    a new ATM call with the same dollar delta, notional = units × S_T ÷ δ_new; ``"units"``: the same index units, notional = units × S_T.
+    ``replace_worthless``: a call that expires worthless is replaced (``True``, default: on the same index units under the delta and
+    units rules, by the gap under the target rule), paid from cash then by selling SPX; ``False`` lets it lapse (nothing bought, no SPX sold).
+    Under the delta and units rules SPX sold to fund a replacement is sold delta-for-delta: the share of the tranche the SPX pays for gives
+    up δ × its notional of SPX, the premium is paid out of it and the excess goes to T-bills, so the sale does not change the exposure.
+    When even all the SPX cannot fund the tranche it is cut to what can be funded, N = cash/c + SPX/δ (every unit of SPX sold), and the
+    roll is flagged ``cut``. ``surplus`` is not used under the target rule (leftover payoff stays in T-bills).
+    ``rebalance``, ``band``, ``unwind_haircut``, ``below`` (target rule only): on the last trading day of each month / quarter after the
+    build, if the live exposure is above (1 + band) × E_A the excess is sold from the calls, most in the money first (highest S/K, then
+    the earliest expiry), partial tranches allowed, at the model mark with ``unwind_haircut`` (vol points, fraction) taken off the vol,
+    proceeds to T-bills, mark − sale booked as ``unwind_cost_B``; if it is below (1 − band) × E_A the shortfall is bought from the
+    T-bills — ATM calls of the tenor (``below="calls"``, default) or SPX (``"spx"``) — as far as the T-bills go (``Trade.partial``).
+    A roll and a check on the same day: the roll first. Every decision is logged in ``StressInfo.trades``.
     ``cash_buffer``: extra equity rotated at t₀ so that B keeps this much cash after repaying the loan (0 = fully invested).
     ``delta``: the call delta used to size the sleeve (notional = equity sold / delta). ``None`` (default) uses the model delta of
     the ATM call at t₀, ∂C/∂S of BSM with q = r — implicit in the option being at the money; a number overrides it (scripted use).
@@ -141,6 +183,10 @@ def simulate(
         raise ValueError(f"surplus must be one of {SURPLUS_POLICIES}")
     if roll not in ROLL_RULES:
         raise ValueError(f"roll must be one of {ROLL_RULES}")
+    if rebalance not in REBALANCE or below not in BELOW:
+        raise ValueError(f"rebalance must be one of {REBALANCE}, below one of {BELOW}")
+    if not 0.0 <= band < 1.0 or unwind_haircut < 0.0:
+        raise ValueError("band must be in [0, 1), unwind_haircut non-negative")
     full = _load(str(file or DAILY_FILE))
     rate_col, vol_col = tenor_columns(full, tenor)
     d = full.dropna(subset=[c for c in REQUIRED if c != "date"] + [rate_col, vol_col]).reset_index(drop=True)
@@ -191,23 +237,46 @@ def simulate(
         dl = float(np.asarray(bsm_greeks(100.0, 100.0, r[k], r[k], iv[k], tenor).delta)) if delta is None else float(delta)
         return c, dl
 
+    def live_delta(k: int) -> float:
+        """Delta of the ATM call bought on day k as the live exposure books it: on the calendar time to its expiry day (a day or two
+        over the tenor, the marks' convention), so a tranche sized on it closes the gap exactly."""
+        tau = float((expiry_of(k)[0] - dates[k]).astype(float)) / 365.0
+        return float(np.asarray(bsm_greeks(S[k], S[k], r[k], r[k], iv[k], tau).delta, dtype=np.float64))
+
     class Tranche:
-        __slots__ = ("delta0", "exp_date", "k_exp", "strike", "units")
+        __slots__ = ("delta0", "exp_date", "k_buy", "k_exp", "strike", "units")
 
-        def __init__(self, units: float, strike: float, exp_date: np.datetime64, k_exp: int, delta0: float) -> None:
-            self.units, self.strike, self.exp_date, self.k_exp, self.delta0 = units, strike, exp_date, k_exp, delta0
+        def __init__(self, units: float, strike: float, exp_date: np.datetime64, k_exp: int, delta0: float, k_buy: int) -> None:
+            self.units, self.strike, self.exp_date, self.k_exp, self.delta0, self.k_buy = units, strike, exp_date, k_exp, delta0, k_buy
 
-    marks = np.zeros(n)   # model value of the live tranches on each day, accumulated segment by segment (purchase day and expiry day excluded)
+    marks = np.zeros(n)      # model value of the live tranches on each day, accumulated segment by segment (purchase day and expiry day excluded)
+    deltas = np.zeros(n)     # live dollar delta of the live tranches, Σ units · δ(t) · S(t), from the purchase day to the day before expiry
+    replaced = np.zeros(n)   # the exposure the live tranches were bought to carry, grown with the index since: Σ δ_buy · N · TR(t)/TR(buy)
+
+    def segment(t: Tranche, units: float, k_from: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(days, model value, dollar delta) of ``units`` of tranche ``t`` from day ``k_from`` to the day before its expiry."""
+        k_end = t.k_exp if t.k_exp > 0 else n
+        idx = np.arange(k_from, k_end)
+        if not idx.size:
+            return idx, np.zeros(0), np.zeros(0)
+        tau = (t.exp_date - dates[idx]).astype(float) / 365.0
+        strikes = np.full(idx.size, t.strike)
+        val = units * np.asarray(bsm_price(S[idx], strikes, r[idx], r[idx], iv[idx], tau), dtype=np.float64)
+        dl = units * S[idx] * np.asarray(bsm_greeks(S[idx], strikes, r[idx], r[idx], iv[idx], tau).delta, dtype=np.float64)
+        return idx, val, dl
+
+    def slot(t: Tranche, units: float, idx: np.ndarray) -> np.ndarray:
+        """The exposure ``units`` of tranche ``t`` were bought to carry, δ_buy · units · K, grown with the index since the purchase."""
+        return np.asarray(t.delta0 * units * t.strike * tr[idx] / tr[t.k_buy], dtype=np.float64)
 
     def mark_segment(t: Tranche, k_buy: int) -> None:
-        k_end = t.k_exp if t.k_exp > 0 else n
-        idx = np.arange(k_buy + 1, k_end)
+        idx, val, dl = segment(t, t.units, k_buy)
         if idx.size:
-            tau = (t.exp_date - dates[idx]).astype(float) / 365.0
-            marks[idx] += t.units * np.asarray(bsm_price(S[idx], np.full(idx.size, t.strike), r[idx], r[idx], iv[idx], tau), dtype=np.float64)
+            marks[idx[1:]] += val[1:]   # the purchase day's value is the premium, booked as new_premium
+            deltas[idx] += dl
+            replaced[idx] += slot(t, t.units, idx)
 
     live: dict[int, list[Tranche]] = {}      # tranches by expiry index
-    delta_notional = 0.0                     # Σ δ_i · N_i over live tranches (exposure replaced)
     eq_units = equity0 / tr[0]
     loan_B = loan0
     cash = 0.0
@@ -217,13 +286,19 @@ def simulate(
     is_roll = np.zeros(n, dtype=bool)
     n_calls = np.zeros(n, dtype=np.int64)          # tranches alive at the end of each day
     bought_day = np.zeros(n, dtype=np.int64)       # tranches bought on the day (build steps and replacements at expiry)
+    unwind = np.zeros(n)                           # mark − sale price on calls sold early (band rebalance with a haircut)
     rolls: list[Roll] = []
     builds: list[Roll] = []
+    trades: list[Trade] = []
     tot_sold = tot_notional = tot_premium = 0.0
+    period_end = np.zeros(n, dtype=bool)           # last trading day of each month / quarter inside the path (never the last day)
+    if roll == "target" and rebalance != "none":
+        per = pd.DatetimeIndex(dates).to_period("M" if rebalance == "monthly" else "Q")
+        period_end[:-1] = (per[1:] != per[:-1])
 
     def buy(k: int, notional: float, c_k: float, d_k: float) -> Tranche:
         e_date, k_e = expiry_of(k)
-        t = Tranche(notional / S[k], S[k], e_date, k_e, d_k)
+        t = Tranche(notional / S[k], S[k], e_date, k_e, d_k, k)
         live.setdefault(k_e, []).append(t)
         bought_day[k] += 1
         mark_segment(t, k)
@@ -231,7 +306,7 @@ def simulate(
 
     def build_step(k: int, remaining: int) -> float:
         """Sell equity, buy one tranche, repay the loan's share: returns the premium booked as call value today."""
-        nonlocal eq_units, loan_B, cash, delta_notional, tot_sold, tot_notional, tot_premium
+        nonlocal eq_units, loan_B, cash, tot_sold, tot_notional, tot_premium
         c_k, d_k = atm(k)
         if c_k / d_k >= 1.0:
             raise ValueError(f"premium {c_k:.1%} of notional exceeds the delta {d_k:.0%}: the calls cost more than the exposure they replace")
@@ -246,18 +321,133 @@ def simulate(
         loan_B -= repay
         cash += buf                             # = sold − premium − repay, exactly
         buy(k, notional, c_k, d_k)
-        delta_notional += d_k * notional
         tot_sold += sold
         tot_notional += notional
         tot_premium += premium
         builds.append(Roll(pd.Timestamp(dates[k]), c_k, 0.0, premium, sold))
         return premium
 
+    def target_roll(k: int, expiring: list[Tranche]) -> float:
+        """Target rule: cash-settle the tranches expiring on day k and buy the gap between Keep's exposure and what the survivors were
+        bought to carry (each replacement restores its own slot); returns the premium paid."""
+        nonlocal eq_units, cash
+        if not expiring:
+            return 0.0
+        date = pd.Timestamp(dates[k])
+        payoff = sum(t.units * max(S[k] - t.strike, 0.0) for t in expiring)
+        cash += payoff
+        c_k, d_k = atm(k)
+        if k == n - 1:
+            return 0.0
+        if payoff <= 0.0 and not replace_worthless:   # every tranche worthless and the lapse rule: nothing bought
+            rolls.append(Roll(date, c_k, 0.0, 0.0, 0.0))
+            is_roll[k] = True
+            return 0.0
+        d_k = live_delta(k)                          # the gap is closed on the live delta; the premium is the tenor's
+        if c_k / d_k >= 1.0:
+            raise ValueError(f"premium {c_k:.1%} of notional exceeds the delta {d_k:.0%}: the calls cost more than the exposure they replace")
+        target = E_A[k]
+        e_b = eq_units * tr[k]
+        before = e_b + deltas[k]                     # the live exposure of the SPX and the surviving tranches (today's expiries are no longer in ``deltas``)
+        gap = target - e_b - replaced[k]             # what the survivors were bought to carry, grown with the index, against Keep's exposure
+        expiry, _ = expiry_of(k)
+        is_roll[k] = True
+        if gap <= TOL:                               # already at or above Keep's exposure: nothing bought, the payoff stays in T-bills
+            rolls.append(Roll(date, c_k, payoff, 0.0, 0.0, False, 0.0, True))
+            trades.append(Trade(date, "roll", before, before, target, target, 0.0, 0.0, 0.0, c_k, d_k, S[k], pd.Timestamp(expiry)))
+            return 0.0
+        cut = False
+        sold = 0.0
+        if c_k * gap / d_k <= cash:                  # the payoff and the T-bills pay for the whole gap
+            notional = gap / d_k
+        else:                                        # the rest is funded by selling SPX: δN − s = gap and cN = cash + s
+            notional = (gap - cash) / (d_k - c_k)
+            sold = c_k * notional - cash
+            if sold > e_b + TOL:                     # not even all the SPX pays for it: every unit sold, the tranche cut
+                sold, cut = e_b, True
+                notional = (cash + sold) / c_k
+                eq_units = 0.0
+            else:
+                eq_units -= sold / tr[k]
+        premium = c_k * notional
+        cash += sold - premium
+        m = len(expiring)
+        for _ in range(m):                           # one gap for the day, split equally over as many tranches as expired (the ladder count is kept)
+            buy(k, notional / m, c_k, d_k)
+        after = eq_units * tr[k] + deltas[k]
+        rolls.append(Roll(date, c_k, payoff, premium, sold, cut, notional))
+        trades.append(Trade(date, "roll", before, after, target, target, premium, notional, -sold, c_k, d_k, S[k], pd.Timestamp(expiry), False, cut))
+        return float(premium)
+
+    def band_check(k: int) -> float:
+        """Target rule: bring the live exposure back inside the band on a period-end day; returns the premium of calls bought (below)."""
+        nonlocal eq_units, cash
+        date = pd.Timestamp(dates[k])
+        target = E_A[k]
+        e_b = eq_units * tr[k]
+        expo = e_b + deltas[k]
+        hi, lo = (1.0 + band) * target, (1.0 - band) * target
+        if expo > hi + TOL:                          # above: sell calls, the most in the money first (highest S/K, then the earliest expiry), partial tranches allowed
+            excess = expo - hi
+            if unwind_haircut >= iv[k]:
+                raise ValueError(f"{date.date()}: the unwind haircut {unwind_haircut:.1%} is not below the vol of the day {iv[k]:.1%}")
+            cands = sorted(((t, ke) for ke, ts in live.items() for t in ts if t.k_buy < k), key=lambda x: (-S[k] / x[0].strike, x[0].exp_date))
+            for t, ke in cands:
+                if excess <= TOL:
+                    break
+                tau = float((t.exp_date - dates[k]).astype(float)) / 365.0
+                dl = float(np.asarray(bsm_greeks(S[k], t.strike, r[k], r[k], iv[k], tau).delta))
+                if dl * S[k] <= TOL:                 # a call so far out of the money that selling it frees no exposure
+                    continue
+                mark_u = float(np.asarray(bsm_price(S[k], t.strike, r[k], r[k], iv[k], tau)))
+                sale_u = float(np.asarray(bsm_price(S[k], t.strike, r[k], r[k], iv[k] - unwind_haircut, tau)))
+                u = min(t.units, excess / (dl * S[k]))
+                idx, val, dl_seg = segment(t, u, k)
+                marks[idx] -= val
+                deltas[idx] -= dl_seg
+                replaced[idx] -= slot(t, u, idx)
+                t.units -= u
+                if t.units <= TOL / S[k]:
+                    live[ke].remove(t)
+                    if not live[ke]:
+                        del live[ke]
+                proceeds = u * sale_u
+                cash += proceeds
+                unwind[k] += u * (mark_u - sale_u)
+                before, expo = expo, expo - u * dl * S[k]
+                excess -= u * dl * S[k]
+                trades.append(Trade(date, "rebalance_up", before, expo, target, hi, proceeds, -u * t.strike, 0.0, sale_u / t.strike, dl, t.strike, pd.Timestamp(t.exp_date)))
+            return 0.0
+        if expo < lo - TOL:                          # below: buy from the T-bills, as far as they go
+            shortfall = lo - expo
+            if below == "calls":
+                c_k, d_k = atm(k)[0], live_delta(k)
+                if c_k / d_k >= 1.0:
+                    raise ValueError(f"premium {c_k:.1%} of notional exceeds the delta {d_k:.0%}: the calls cost more than the exposure they replace")
+                wanted = shortfall / d_k
+                notional = min(wanted, cash / c_k)
+                partial = notional < wanted - TOL
+                if notional <= TOL:
+                    trades.append(Trade(date, "rebalance_down", expo, expo, target, lo, 0.0, 0.0, 0.0, c_k, d_k, S[k], pd.Timestamp(expiry_of(k)[0]), True))
+                    return 0.0
+                premium = c_k * notional
+                cash -= premium
+                nt = buy(k, notional, c_k, d_k)
+                after = eq_units * tr[k] + deltas[k]
+                trades.append(Trade(date, "rebalance_down", expo, after, target, lo, premium, notional, 0.0, c_k, d_k, S[k], pd.Timestamp(nt.exp_date), partial))
+                return float(premium)
+            usd = min(shortfall, cash)
+            partial = usd < shortfall - TOL
+            eq_units += usd / tr[k]
+            cash -= usd
+            trades.append(Trade(date, "rebalance_down", expo, expo + usd, target, lo, usd, 0.0, usd, S[k], 1.0, float("nan"), pd.Timestamp("NaT"), partial))
+        return 0.0
+
     prem_today = build_step(0, n_tr)
     prem_day[0] = prem_today
     E_B[0], call_val[0], call_notional[0], cash_B[0], loan_B_arr[0] = eq_units * tr[0], prem_today, tot_notional, cash, loan_B
     n_calls[0] = sum(len(ts) for ts in live.values())
-    exposure_B[0] = E_B[0] + delta_notional
+    exposure_B[0] = E_B[0] + replaced[0]
     for k in range(1, n):
         eq_pnl_B[k] = eq_units * (tr[k] - tr[k - 1])
         div_B[k] = eq_units * div_step[k]       # on the units held over the day, before the day's trades (part of eq_pnl_B, reinvested)
@@ -269,11 +459,15 @@ def simulate(
         payoff_today = 0.0
         if k in build_days:
             new_premium += build_step(k, n_tr - build_days.index(k))
-        for t in live.pop(k, []):            # tranches expiring today: cash-settle, roll into a new ATM call (same dollar delta, or same units)
+        expiring = live.pop(k, [])
+        if roll == "target":
+            new_premium += target_roll(k, expiring)
+            payoff_today += sum(t.units * max(S[k] - t.strike, 0.0) for t in expiring)
+            expiring = []
+        for t in expiring:                   # tranches expiring today: cash-settle, roll into a new ATM call (same dollar delta, or same units)
             payoff = t.units * max(S[k] - t.strike, 0.0)
             payoff_today += payoff
             cash += payoff
-            delta_notional -= t.delta0 * t.units * t.strike
             if k < n - 1 and payoff <= 0.0 and not replace_worthless:   # expired worthless: nothing to reinvest, the call lapses
                 rolls.append(Roll(pd.Timestamp(dates[k]), atm(k)[0], 0.0, 0.0, 0.0))
                 is_roll[k] = True
@@ -302,27 +496,29 @@ def simulate(
                     sold = min(short / premium * d_k * notional, eq_units * tr[k])   # (equal to all the SPX when the tranche was cut)
                     eq_units -= sold / tr[k]
                     cash = sold - short
-                nt = buy(k, notional, c_k, d_k)
-                delta_notional += d_k * nt.units * nt.strike
+                buy(k, notional, c_k, d_k)
                 new_premium += premium
-                rolls.append(Roll(pd.Timestamp(dates[k]), c_k, payoff, premium, sold, cut))
+                rolls.append(Roll(pd.Timestamp(dates[k]), c_k, payoff, premium, sold, cut, notional))
                 is_roll[k] = True
+        marks_pre = marks[k]                 # the calls' value before any early sale today (the P&L is measured on it; a sale moves value to cash)
+        if period_end[k] and k > build_days[-1]:
+            new_premium += band_check(k)
         prem_day[k], pay_day[k] = new_premium, payoff_today
         call_val[k] = marks[k] + new_premium
-        call_pnl_B[k] = marks[k] + payoff_today - call_val[k - 1]   # value of the surviving tranches + payoffs realised, vs yesterday's book
+        call_pnl_B[k] = marks_pre + payoff_today - call_val[k - 1]   # value of the surviving tranches + payoffs realised, vs yesterday's book
         E_B[k] = eq_units * tr[k]
         call_notional[k] = sum(t.units * t.strike for ts in live.values() for t in ts)
         n_calls[k] = sum(len(ts) for ts in live.values())
         cash_B[k] = cash
         loan_B_arr[k] = loan_B
-        exposure_B[k] = E_B[k] + delta_notional
+        exposure_B[k] = E_B[k] + replaced[k]
 
     nav_A = E_A - loan
     nav_B = E_B + call_val + cash_B - loan_B_arr
     eq_pnl_A = np.concatenate([[0.0], np.diff(E_A)])
     # ---- accounting identity, every day, both setups
     gap_A = np.diff(nav_A) - (eq_pnl_A[1:] - interest[1:])
-    gap_B = np.diff(nav_B) - (eq_pnl_B[1:] + call_pnl_B[1:] + cash_int[1:] - interest_B[1:])
+    gap_B = np.diff(nav_B) - (eq_pnl_B[1:] + call_pnl_B[1:] + cash_int[1:] - interest_B[1:] - unwind[1:])
     for name, gap, nav in (("A", gap_A, nav_A), ("B", gap_B, nav_B)):
         tol = TOL * np.maximum(1.0, np.abs(nav[1:]) / 1e9)   # 1e-6 USD per 1 bn of NAV (Assumptions 35), the float64 limit
         if (np.abs(gap) > tol).any():
@@ -335,14 +531,16 @@ def simulate(
         "spx_tr": tr, "spxfp": S, "drawdown": drawdown, "loan_rate": base + spread,
         "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
         "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr, "nav_B": nav_B,
-        "exposure_B": exposure_B, "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
+        "exposure_A": E_A, "exposure_B": E_B + deltas, "exposure_replaced_B": exposure_B,   # live dollar delta (SPX + Σ units·δ·S of the calls); what the holdings were bought to carry (SPX + Σ δ_buy·N·TR(t)/TR(buy))
+        "unwind_cost_B": unwind, "unwind_cost_cum_B": np.cumsum(unwind),
+        "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,
         "n_bought": np.cumsum(bought_day),   # tranches bought to each day: the build steps done so far, plus every replacement at expiry
         "interest_cum_A": np.cumsum(interest), "interest_cum_B": np.cumsum(interest_B), "premiums_cum_B": np.cumsum(prem_day), "payoffs_cum_B": np.cumsum(pay_day),   # costs since the start, to each day
         "div_A": div_A, "div_B": div_B, "div_cum_A": np.cumsum(div_A), "div_cum_B": np.cumsum(div_B),   # dividends received (net of withholding, reinvested in the SPX), on the day and since the start
     }, index=pd.DatetimeIndex(d.date, name="date"))
     info = StressInfo(start=pd.Timestamp(dates[0]), end=pd.Timestamp(dates[-1]), premium0=tot_premium / tot_notional, rotation=tot_sold, delta0=tot_sold / tot_notional, notional0=tot_notional,
                       units0=sum(b.premium_paid / b.premium_frac for b in builds) / S[0], loan_base0=float(base[0]), rate_col=rate_col, vol_col=vol_col, tenor=float(tenor),
-                      rolls=tuple(rolls), builds=tuple(builds), build_end=pd.Timestamp(dates[build_days[-1]]))
+                      rolls=tuple(rolls), builds=tuple(builds), build_end=pd.Timestamp(dates[build_days[-1]]), trades=tuple(trades))
     return out, info
 
 
@@ -388,8 +586,15 @@ def _start_row(p: pd.DataFrame, info: StressInfo) -> dict[str, object]:
         "dividends A": float(p["div_A"].sum()), "dividends B": float(p["div_B"].sum()),
         "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
         "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
-        "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
-        "B: cut rolls": sum(1 for r in info.rolls if r.cut),
+        "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0 and not r.skipped), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
+        "B: cut rolls": sum(1 for r in info.rolls if r.cut), "B: rolls skipped": sum(1 for r in info.rolls if r.skipped),
+        "B: rebalances up": len({t.date for t in info.trades if t.event == "rebalance_up"}), "B: rebalances down": len({t.date for t in info.trades if t.event == "rebalance_down"}),
+        "B: partial rebalances": len({t.date for t in info.trades if t.partial}),
+        "B: calls sold at rebalances": float(sum(t.usd_traded for t in info.trades if t.event == "rebalance_up")),
+        "B: calls bought at rebalances": float(sum(t.usd_traded for t in info.trades if t.event == "rebalance_down" and t.notional > 0.0)),
+        "B: SPX bought at rebalances": float(sum(t.spx_usd for t in info.trades if t.event == "rebalance_down")),
+        "B: unwind cost": float(p["unwind_cost_B"].sum()), "end: exposure A": float(p["exposure_A"].iloc[-1]), "end: exposure B": float(p["exposure_B"].iloc[-1]),
+        "B: trades": info.trades,
         "B: call notional end": float(p["call_notional"].iloc[-1]), "build end": info.build_end,
         "A return": float(p["nav_A"].iloc[-1] / p["nav_A"].iloc[0] - 1.0), "B return": float(p["nav_B"].iloc[-1] / p["nav_B"].iloc[0] - 1.0),
         "B: max LTV": float((p["loan_B"] / p["cap_B"]).max()),
@@ -491,14 +696,38 @@ def starts_table(rs: pd.DataFrame) -> pd.DataFrame:
         "keep the loan today: SPX (m)": (rs["end: equity A"] / m).round(1), "keep the loan today: loan (m)": (rs["end: loan A"] / m).round(1),
         "rotate into calls today: SPX (m)": (rs["end: equity B"] / m).round(1), "rotate into calls today: calls (m)": (rs["end: calls B"] / m).round(1),
         "rotate into calls today: call notional (m)": (rs["B: call notional end"] / m).round(1), "rotate into calls today: cash (m)": (rs["end: cash B"] / m).round(1),
+        "rolls skipped (exposure already at Keep's)": rs["B: rolls skipped"],
+        "rebalances up": rs["B: rebalances up"], "rebalances down": rs["B: rebalances down"], "rebalances partial": rs["B: partial rebalances"],
+        "calls sold at rebalances (m)": (rs["B: calls sold at rebalances"] / m).round(1), "calls bought at rebalances (m)": (rs["B: calls bought at rebalances"] / m).round(1),
+        "SPX bought at rebalances (m)": (rs["B: SPX bought at rebalances"] / m).round(1), "unwind cost (m)": (rs["B: unwind cost"] / m).round(2),
+        "exposure today: keep the loan (m)": (rs["end: exposure A"] / m).round(1), "exposure today: rotate into calls (m)": (rs["end: exposure B"] / m).round(1),
+        "exposure ratio today": (rs["end: exposure B"] / rs["end: exposure A"]).round(4), "calls / NAV today": (rs["end: calls B"] / rs["NAV B end"]).round(4),
     }, index=rs.index)
     return out.reset_index(drop=True)
 
 
-PATH_COLUMNS = ("nav_A", "nav_B", "headroom_A", "dry_powder_B", "E_A", "loan", "E_B", "call_val", "call_notional", "cash_B", "loan_B", "spx_tr")
+TRADE_COLUMNS = ("date", "event", "exposure_before", "exposure_after", "target", "band_edge", "usd_traded", "notional", "spx_usd", "price", "delta", "strike", "expiry", "partial", "cut")
+
+
+def trades_table(rs: pd.DataFrame) -> pd.DataFrame:
+    """The trade log of every start in ``rolling_starts`` rows as one long table for export: start, then the ``Trade`` fields, USD in millions
+    (exposures, target, band edge, USD traded, notional, SPX), sorted by start then date."""
+    rows = [{"start": s.date(), **{c: getattr(t, c) for c in TRADE_COLUMNS}} for s, trades in zip(pd.DatetimeIndex(rs.index), rs["B: trades"], strict=True) for t in trades]
+    out = pd.DataFrame(rows, columns=["start", *TRADE_COLUMNS])
+    if out.empty:
+        return out
+    for c in ("exposure_before", "exposure_after", "target", "band_edge", "usd_traded", "notional", "spx_usd"):
+        out[c] = (out[c] / 1e6).round(3)
+    out["date"] = pd.DatetimeIndex(out["date"]).date
+    out["expiry"] = [d.date() if pd.notna(d) else "" for d in out["expiry"]]
+    return out.sort_values(["start", "date"], kind="stable").reset_index(drop=True)
+
+
+PATH_COLUMNS = ("nav_A", "nav_B", "headroom_A", "dry_powder_B", "E_A", "loan", "E_B", "call_val", "call_notional", "cash_B", "loan_B", "exposure_A", "exposure_B", "spx_tr")
 PATH_NAMES = {"nav_A": "keep the loan: NAV (m)", "nav_B": "rotate into calls: NAV (m)", "headroom_A": "keep the loan: dry powder (m)", "dry_powder_B": "rotate into calls: dry powder (m)",
               "E_A": "keep the loan: SPX (m)", "loan": "keep the loan: loan (m)", "E_B": "rotate into calls: SPX (m)", "call_val": "rotate into calls: calls (m)",
-              "call_notional": "rotate into calls: call notional (m)", "cash_B": "rotate into calls: cash (m)", "loan_B": "rotate into calls: loan (m)", "spx_tr": "SPX with dividends (start = 1)"}
+              "call_notional": "rotate into calls: call notional (m)", "cash_B": "rotate into calls: cash (m)", "loan_B": "rotate into calls: loan (m)",
+              "exposure_A": "keep the loan: exposure (m)", "exposure_B": "rotate into calls: exposure (m)", "spx_tr": "SPX with dividends (start = 1)"}
 
 
 def paths_table(paths: dict[str, pd.DataFrame]) -> pd.DataFrame:

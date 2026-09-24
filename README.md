@@ -3,16 +3,17 @@
 **The question.** An illustrative portfolio (default inputs, all editable): 1 bn in SPX with a 250 m Lombard loan on it (lending value 75 %, SOFR + 75 bp, interest
 capitalised). Option 1, **Keep the loan**: nothing changes. Option 2, **Rotate into calls**: week by week sell SPX,
 buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so the SPX-equivalent exposure stays
-1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. A call that expires in
-the money is replaced by a new ATM call carrying the same dollar delta (notional = units × index ÷ delta, about twice the
-units; or on the same index units, sidebar); a call that expires worthless is replaced on the same index units (or lapses,
-sidebar). Replacements are paid from the payoff, then the T-bills, then by selling SPX delta-for-delta (the excess over the
-premium goes to T-bills); a replacement that not even all the SPX can fund is cut to what can be, and counted. Historical
+1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. At every expiry the
+replacement closes the gap between Keep's SPX value and the rotation's live exposure (its SPX plus the calls' dollar delta),
+paid from the payoff and the T-bills, then by selling SPX; every quarter-end the exposure is brought back inside ±10 % of
+Keep's (calls sold, most in the money first, at the mark less 1 vol point; calls bought from the T-bills). The earlier rules
+stay in the sidebar: a new call on the same dollar delta (about twice the units) or on the same index units, a worthless call
+replaced (or lapsing), SPX sold delta-for-delta, a replacement nobody can fund cut to what can be. Historical
 data only, September 1997 to today.
 
 **The app** — `app/historical_app.py`, two pages, each with its own sidebar (the call tenor and the dividend withholding tax are
 common to both). Page 1's sidebar is the setup above, every number editable; the page runs only when its **Launch simulation** button is
-pressed (sidebar, grid, start year and end day), and the button is greyed out until something changes (Advanced: withholding tax, what an in-the-money call is replaced on, whether a
+pressed (sidebar, grid, start year and end day), and the button is greyed out until something changes (Advanced: withholding tax, what an expiring call is replaced on, the band check's frequency, width, haircut and what it buys, whether a
 worthless call is replaced, what a payoff left after a roll buys, the lending values of the calls and of the T-bills, the start-date grid); page 2's sidebar
 holds the backtest's inputs (premium, premium mode, strike window, cash leg):
 1. **Historical simulation** (`app/views/all_starts.py`): both portfolios put on at every trading day (or week) from

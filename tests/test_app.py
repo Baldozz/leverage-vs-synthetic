@@ -85,7 +85,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert f"<span style='color:#c00000'><b>{ka['y'][i_a]:,.0f} m</b></span> · {pd.Timestamp(ka['x'][i_a]):%d %b %Y} · <span style='color:#0b2a6f'>{kb['y'][i_a]:,.0f} m</span>" in texts
     assert f"<span style='color:#0b2a6f'><b>{kb['y'][i_b]:,.0f} m</b></span> · {pd.Timestamp(kb['x'][i_b]):%d %b %Y} · <span style='color:#c00000'>{ka['y'][i_b]:,.0f} m</span>" in texts
     assert {t for t in texts if t.startswith(("peak", "bottom"))} == {"peak Mar 2000", "bottom Oct 2002", "peak Oct 2007", "bottom Mar 2009", "peak Feb 2020", "bottom Mar 2020", "peak Jan 2022", "bottom Oct 2022"}
-    p0, _ = simulate("1997-09-12", "2026-09-14")
+    p0, _ = simulate("1997-09-12", "2026-09-14", roll="delta")   # the sidebar's roll rule
     assert ka["y"][0] == pytest.approx(p0["nav_A"].iloc[-1] / m, rel=1e-9) and kb["y"][0] == pytest.approx(p0["nav_B"].iloc[-1] / m, rel=1e-9)
     assert all(n_ == pytest.approx(b_ - a_, abs=1e-9) for a_, b_, n_ in zip(ka["y"], kb["y"], kn["y"], strict=True)) and min(kn["y"]) < 0 < max(kn["y"])
     assert by_start[2]["y"] == [max(v, 0.0) for v in kn["y"]] and by_start[3]["y"] == [min(v, 0.0) for v in kn["y"]]   # the shaded areas split the net at zero
@@ -129,7 +129,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert gfc.iloc[2, 1].startswith("142 m (-81% from the start)")
     assert gfc.iloc[8, 1].startswith("381 − 366 = 15 m (LTV 96%")   # the loan is deducted: 381 − 366 = 15
     # the cells are the daily simulation's values on 9 Mar 2009 for the 24 Mar 2000 start: recompute it directly
-    pa, _ = simulate("2000-03-24", "2026-09-14")
+    pa, _ = simulate("2000-03-24", "2026-09-14", roll="delta")
     da = pa.loc["2009-03-09"]
     assert gfc.iloc[2, 1] == f"{da['nav_A'] / m:,.0f} m ({da['nav_A'] / m / 750 - 1:+.0%} from the start)" and gfc.iloc[2, 2] == f"{da['nav_B'] / m:,.0f} m ({da['nav_B'] / m / 750 - 1:+.0%} from the start)" and gfc.iloc[2, 3] == pm(da["nav_B"] - da["nav_A"])
     assert gfc.iloc[3, 1] == f"{da['E_A'] / m:,.0f} m" and gfc.iloc[3, 2] == f"{da['E_B'] / m:,.0f} m" and gfc.iloc[3, 3] == pm(da["E_B"] - da["E_A"])
@@ -151,7 +151,7 @@ def test_all_starts_page_weekly_grid() -> None:
     # the picks and the count over every weekly start running on 9 Mar 2009 (the page's grid): recompute all from the engine on the same starts
     bottom = pd.Timestamp("2009-03-09")
     # run past the bottom: `rolling_paths` skips a start whose build is not complete 30 days before the end date, and the page runs every start to today
-    _, paths = rolling_paths(pd.date_range("1997-09-09", bottom, freq="W-FRI"), "2010-06-30", columns=("nav_A", "nav_B", "headroom_A", "dry_powder_B"), sample="M", mark_days=(bottom,))
+    _, paths = rolling_paths(pd.date_range("1997-09-09", bottom, freq="W-FRI"), "2010-06-30", columns=("nav_A", "nav_B", "headroom_A", "dry_powder_B"), sample="M", mark_days=(bottom,), roll="delta")
     na, nb, ra, db_ = (paths[c].loc[bottom] for c in ("nav_A", "nav_B", "headroom_A", "dry_powder_B"))
     assert len(na) == 600 and na.notna().all() and "600 starts running that day" in " ".join(mk.value for mk in at.markdown)
     assert na.min() == pytest.approx(da["nav_A"]) and na.idxmin() == pd.Timestamp("2000-03-24")   # the worst trajectory is the lowest NAV that day over all 600 starts
@@ -164,7 +164,7 @@ def test_all_starts_page_weekly_grid() -> None:
     # the 2020 bottom came five weeks after the peak: the worst start had done only a few of its 52 weekly steps, and the cell says so (not "of the 52 bought")
     covid = at.table[3].value
     w20 = pd.Timestamp(covid.iloc[1, 1].split(",")[0])
-    p20, _ = simulate(w20, "2026-09-14")
+    p20, _ = simulate(w20, "2026-09-14", roll="delta")
     d20 = p20.loc["2020-03-23"]
     assert 1 <= int(d20["n_bought"]) < 52 and int(d20["n_calls"]) == int(d20["n_bought"]) and d20["loan_B"] > 0.5e6
     assert covid.iloc[5, 2] == f"{d20['call_val'] / m:,.0f} m ({int(d20['n_calls'])} calls alive of the {int(d20['n_bought'])} bought so far: {int(d20['n_bought'])} of the 52 weekly steps done, on a notional of {d20['call_notional'] / m:,.0f} m of index)"

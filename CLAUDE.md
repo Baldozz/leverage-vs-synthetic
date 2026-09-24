@@ -2,10 +2,11 @@
 
 Investment decision-support tool. **The live question** (`README.md`): 1 bn in SPX with a
 250 m Lombard loan (lending value 75 %, SOFR + 75 bp, interest capitalised) — **Keep the loan**, or **Rotate into
-calls**: week by week sell SPX, buy 5-year ATM calls on SPXFP sized by the model delta, repay the loan; a call that
-expires in the money is replaced by an ATM call carrying the same dollar delta (or on the same index units, sidebar), a call
-that expires worthless is replaced on the same index units (or lapses, sidebar); SPX sold to fund a replacement is sold
-delta-for-delta, and a replacement nobody can fund is cut to what can be. Historical data only
+calls**: week by week sell SPX, buy 5-year ATM calls on SPXFP sized by the model delta, repay the loan; at every
+expiry the replacement closes the gap to Keep's exposure (SPX + the calls' live dollar delta), and every quarter-end the
+exposure is brought back inside ±10 % of Keep's (calls sold at the mark less 1 vol point / calls bought from the T-bills);
+the earlier rules (same dollar delta, same index units, worthless calls lapsing, SPX sold delta-for-delta, unfundable
+replacements cut) stay in the sidebar. Historical data only
 (Sept 1997 → today), every trading day as a start date, no Monte Carlo. Engine `src/fosim/analytics/leverage_stress.py`,
 app `app/historical_app.py` (two pages), formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p.
 The earlier Monte Carlo simulator (strategies A/B/C/D, `SPEC.md`, `docs/PLAN.md`, `app/streamlit_app.py`) is kept
