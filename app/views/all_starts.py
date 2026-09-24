@@ -193,6 +193,9 @@ st.caption(f"One line per start date ({len(cols):,} lines{', one start in five o
            f"Yellow to orange, same light-to-strong logic and drawn in front, are the rotations that stopped buying calls after a correction (orange profile on the right): {n_stop:,} of the {len(sel_all):,} starts had at least one call expire worthless and not replaced, {n_all:,} of them lost every call. "
            "Dashed lines: the market bottoms (table below).")
 
+ALIGNED = {"l": 80, "r": 80, "t": 30, "b": 40}   # the same fixed margins on the NAV, dry-powder and exposure charts: their plot areas line up left and right
+DARK_YELLOW = "#c9a000"
+
 # ---------------- NAV on the end day by start date: Keep, Rotate and the net on the same start, one point per selected start (gaps where starts are not selected)
 st.subheader(f"NAV on {end_day:%d %b %Y} by start date")
 end_a = (rs["NAV A end"] / M).where(rs.index.isin(sel_all))
@@ -243,7 +246,8 @@ x_win = [max(x_lo, pd.Timestamp(rs.index[0]) - pd.DateOffset(days=30)), x_hi + p
 fig.update_xaxes(range=x_win, row=1, col=1)
 fig.update_xaxes(title_text="Start date", range=x_win, row=2, col=1)
 fig.update_layout(height=640, title={"text": f"On {end_day:%d %b %Y}: the NAV of each portfolio and the net, by start date — {len(sel_all):,} starts", "x": 0.02, "font": {"size": 15}},
-                  **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": {"l": 40, "r": 20, "t": 30, "b": 40}})
+                  **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": ALIGNED})
+fig.update_yaxes(automargin=False)   # fixed margins on the three charts by date, so their plot areas line up left and right
 st.plotly_chart(fig, width="stretch")
 st.caption(f"Top: the NAV on {end_day:%d %b %Y} of the two portfolios put on at each start date (x axis), one point per selected start, both leaving from {(s.equity - s.loan) / M:,.0f} m on that day. "
            "Earlier starts have been held longer, so the level falls along the axis; read the two lines against each other. Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation "
@@ -255,16 +259,17 @@ st.caption(f"Top: the NAV on {end_day:%d %b %Y} of the two portfolios put on at 
 st.subheader(f"Dry powder on {end_day:%d %b %Y} by start date")
 dp_a = (rs["A: headroom end"] / M).where(rs.index.isin(sel_all))
 dp_b = (rs["B: dry powder end"] / M).where(rs.index.isin(sel_all))
-ltv_pct = (rs["end: loan A"] / (s.lv_equity * rs["end: equity A"]) * 100.0).where(rs.index.isin(sel_all))   # Keep's LTV = loan ÷ lending value, %; the margin call is at 100
+ltv_pct = (rs["end: loan A"] / (s.lv_equity * rs["end: equity A"]) * 100.0).where(rs.index.isin(sel_all))   # Keep's LTV = loan ÷ lending value, %; the margin call at s.margin_call
+call_pct = s.margin_call * 100.0
 net_dp = dp_b - dp_a
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05, specs=[[{"secondary_y": True}], [{}]])
 fig.add_trace(go.Scatter(x=rs.index, y=dp_a, name=f"{A}: room before a margin call", line={"color": RED, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=dp_b, name=f"{B}: dry powder", line={"color": BLUE, "width": 1.4}, connectgaps=False, hovertemplate=hov), row=1, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=ltv_pct, name=f"{A}: LTV (right axis; yellow far from a margin call, orange close to it)", mode="markers",
-                         marker={"size": 4, "color": ltv_pct, "colorscale": [[0.0, LIGHT_YELLOW], [1.0, ORANGE]], "cmin": 0.0, "cmax": 100.0, "showscale": True,
-                                 "colorbar": {"title": {"text": "LTV"}, "ticksuffix": " %", "thickness": 10, "len": 0.5, "y": 0.78}},
+                         marker={"size": 4, "color": ltv_pct, "colorscale": [[0.0, LIGHT_YELLOW], [1.0, ORANGE]], "cmin": 0.0, "cmax": call_pct, "showscale": True,
+                                 "colorbar": {"title": {"text": "LTV", "side": "right"}, "ticksuffix": " %", "thickness": 10, "len": 0.35, "orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.2, "yanchor": "top"}},
                          hovertemplate="start %{x|%d %b %Y}<br>Keep the loan: LTV %{y:.0f} %<extra></extra>"), row=1, col=1, secondary_y=True)
-fig.add_hline(y=100.0, line={"color": ORANGE, "width": 1, "dash": "dot"}, annotation={"text": "margin call (LTV 100 %)", "font": {"size": 10, "color": ORANGE}}, annotation_position="top left",
+fig.add_hline(y=call_pct, line={"color": ORANGE, "width": 1, "dash": "dot"}, annotation={"text": f"margin call (LTV {s.margin_call:.0%})", "font": {"size": 10, "color": ORANGE}}, annotation_position="top left",
               row=1, col=1, secondary_y=True)
 fig.add_trace(go.Scatter(x=rs.index, y=net_dp.clip(lower=0.0), name="rotation has more", fill="tozeroy", mode="none", fillcolor="rgba(11, 42, 111, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
 fig.add_trace(go.Scatter(x=rs.index, y=net_dp.clip(upper=0.0), name="rotation has less", fill="tozeroy", mode="none", fillcolor="rgba(192, 0, 0, 0.35)", connectgaps=False, hoverinfo="skip"), row=2, col=1)
@@ -272,6 +277,10 @@ fig.add_trace(go.Scatter(x=rs.index, y=net_dp, name=f"net dry powder: {B} − {A
 mark_corrections(fig)
 mark_lowest(fig, dp_a, dp_b, A, B, RED, -45)
 mark_lowest(fig, dp_b, dp_a, B, A, BLUE, -85)
+if ltv_pct[in_win].notna().any():   # the highest LTV inside the window: its value and start date, in the dots' colour
+    i_ltv = ltv_pct[in_win].idxmax()
+    fig.add_annotation(x=i_ltv, y=float(ltv_pct[i_ltv]), xref="x", yref="y2", text=f"<span style='color:{DARK_YELLOW}'><b>LTV {ltv_pct[i_ltv]:.0f} %</b></span> · {i_ltv:%d %b %Y}",
+                       showarrow=True, arrowcolor=DARK_YELLOW, arrowwidth=1, ax=0, ay=-32, font={"size": 11}, bgcolor="rgba(255, 255, 255, 0.85)", bordercolor=DARK_YELLOW, borderwidth=1)
 dp_win = pd.concat([dp_a[in_win], dp_b[in_win]])
 net_dp_win = net_dp[in_win]
 fig.update_yaxes(title_text="dry powder (USD m)", rangemode="tozero", range=[0, float(dp_win.max()) * 1.05] if dp_win.notna().any() else None, row=1, col=1, secondary_y=False)
@@ -281,11 +290,12 @@ fig.update_yaxes(title_text="net (USD m)", zeroline=True, zerolinecolor=GREY,
 fig.update_xaxes(range=x_win, row=1, col=1)
 fig.update_xaxes(title_text="Start date", range=x_win, row=2, col=1)
 fig.update_layout(height=640, title={"text": f"On {end_day:%d %b %Y}: the dry powder of each portfolio and the net, by start date — {len(sel_all):,} starts", "x": 0.02, "font": {"size": 15}},
-                  **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": {"l": 40, "r": 20, "t": 30, "b": 40}})
+                  **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": {**ALIGNED, "b": 150}})
+fig.update_yaxes(automargin=False)
 st.plotly_chart(fig, width="stretch")
-st.caption(f"Top: on {end_day:%d %b %Y}, for each start date, the room before a margin call of the loan portfolio ({s.lv_equity:.0%} × SPX − loan, red) and the dry powder of the rotation "
-           f"({s.lv_equity:.0%} × SPX + {s.lv_calls:.0%} × calls + {s.lv_cash:.0%} × T-bills − loan, blue), both in USD m; the dots are the loan portfolio's LTV = loan ÷ lending value on the right axis, "
-           "yellow far from a margin call and orange close to it (the call comes at 100 %, the dotted line; the further SPX fall to it is 1 − LTV). "
+st.caption(f"Top: on {end_day:%d %b %Y}, for each start date, the room before a margin call of the loan portfolio ({s.margin_call:.0%} × {s.lv_equity:.0%} × SPX − loan, red) and the dry powder of the rotation "
+           f"({s.margin_call:.0%} × ({s.lv_equity:.0%} × SPX + {s.lv_calls:.0%} × calls + {s.lv_cash:.0%} × T-bills) − loan, blue), both in USD m; the dots are the loan portfolio's LTV = loan ÷ lending value on the right axis, "
+           f"yellow far from a margin call and orange close to it (the call comes at LTV {s.margin_call:.0%}, the dotted line; the further SPX fall to it is 1 − LTV ÷ {s.margin_call:.0%}); the yellow label marks the highest LTV in the window. "
            "Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation has more dry powder and red where it has less. "
            "Dotted vertical lines: the market peaks; dashed: the bottoms. Same selection and zoom window as the NAV chart above; the labels mark each portfolio's lowest dry powder inside the window with the other's on that start.")
 
@@ -314,7 +324,8 @@ if not ratio_w.empty:
     fig.update_yaxes(title_text="rotation's exposure ÷ Keep's", range=[y_lo, y_hi], dtick=0.05, tickformat=".2f")
     fig.update_xaxes(title_text="Date", range=x_win)   # the same window as the two charts above: they end on the same vertical line
     fig.update_layout(height=380, title={"text": f"Live exposure of the rotation ÷ Keep's SPX value, month by month across the {len(sel_all):,} selected starts", "x": 0.02, "font": {"size": 15}},
-                      **{**LAYOUT, "legend": {"orientation": "h", "y": -0.2, "x": 0, "yanchor": "top"}})
+                      **{**LAYOUT, "legend": {"orientation": "h", "y": -0.2, "x": 0, "yanchor": "top"}, "margin": ALIGNED})
+    fig.update_yaxes(automargin=False)
     st.plotly_chart(fig, width="stretch")
     st.caption("The rotation's live exposure (its SPX plus the dollar delta of its calls, model delta of the day) divided by Keep's SPX value, on each month-end, across the selected starts alive on that date: "
                "median and 5th–95th percentile band. It is 1 on every start day and, under *Keep's exposure*, inside the band on every funded check day (dashed lines) and back to 1 "
@@ -435,8 +446,9 @@ def trajectory(w: pd.Timestamp, title: str, same_start: str, at_: dict[str, pd.S
         ["calls held, market value", "—", f"{v('call_val'):,.0f} m ({n_alive}, on a notional of {v('call_notional'):,.0f} m of index)", pm(v("call_val"))],
         ["loan", f"{v('loan'):,.0f} m", f"{v('loan_B'):,.0f} m" + (" (rotation still under way)" if at_["loan_B"][w] > 0.5e6 else ""), pm(v("loan_B") - v("loan"))],
         ["lending value of the holdings", f"{lv_a:,.0f} m ({s.lv_equity:.0%} of the SPX)", f"{lv_b:,.0f} m ({s.lv_equity:.0%} of the SPX + {s.lv_calls:.0%} of the calls + {s.lv_cash:.0%} of the T-bills)", pm(lv_b - lv_a)],
-        ["dry powder = lending value − loan", f"{lv_a:,.0f} − {v('loan'):,.0f} = {v('headroom_A'):,.0f} m (LTV {at_['ltv_A'][w]:.0%}: a further {max(1 - at_['ltv_A'][w], 0):.0%} SPX fall to a margin call)",
-         f"{lv_b:,.0f} − {v('loan_B'):,.0f} = {v('dry_powder_B'):,.0f} m", pm(v("dry_powder_B") - v("headroom_A"))],
+        [f"dry powder = {s.margin_call:.0%} × lending value − loan",
+         f"{s.margin_call * lv_a:,.0f} − {v('loan'):,.0f} = {v('headroom_A'):,.0f} m (LTV {at_['ltv_A'][w]:.0%}: " + (f"a further {1 - at_['ltv_A'][w] / s.margin_call:.0%} SPX fall to a margin call)" if at_["ltv_A"][w] < s.margin_call else f"above the {s.margin_call:.0%} call level, in margin call)"),
+         f"{s.margin_call * lv_b:,.0f} − {v('loan_B'):,.0f} = {v('dry_powder_B'):,.0f} m", pm(v("dry_powder_B") - v("headroom_A"))],
         ["interest cumulated", f"{v('interest_cum_A'):,.0f} m", f"{v('interest_cum_B'):,.0f} m (during the build)", pm(v("interest_cum_B") - v("interest_cum_A"))],
     ]
 
@@ -456,8 +468,8 @@ for (lab, r, alive), tab in zip(shown, st.tabs([f"{lab} bottom — {r.trough:%d 
     rows = trajectory(w, "Worst trajectory: the lowest NAV that day", f"same start (the lowest NAV that day: {who})", at_, r)
     rows.append(["rotation has more dry powder on", "", "", f"{int((dp_all > room_all).sum()):,} of {len(alive):,} starts running that day"])
     show(rows)
-    st.caption(f"Market values on the bottom day, from the daily simulation of each trajectory. LTV = loan ÷ ({s.lv_equity:.0%} × SPX); the margin call comes when the SPX falls by a further 1 − LTV. "
-               f"Dry powder = the lending value of what is held − loan: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (at market value, not notional), {s.lv_cash:.0%} on the T-bills (sidebar, Advanced). "
+    st.caption(f"Market values on the bottom day, from the daily simulation of each trajectory. LTV = loan ÷ ({s.lv_equity:.0%} × SPX); the bank calls at LTV {s.margin_call:.0%} (sidebar), i.e. when the SPX falls by a further 1 − LTV ÷ {s.margin_call:.0%}. "
+               f"Dry powder = {s.margin_call:.0%} × the lending value of what is held − loan: {s.lv_equity:.0%} on the SPX, {s.lv_calls:.0%} on the calls (at market value, not notional), {s.lv_cash:.0%} on the T-bills (sidebar, Advanced). "
                "Worst trajectory: the start with the lowest NAV that day in either portfolio, both strategies read on that same start so every Δ is like for like — its balance sheet and the interest "
                "capitalised on each loan since the start (Rotate: only while the build was repaying it). The rotation's T-bills are the payoffs of the calls that expired in the money, less the premiums of "
                "their replacements. Dividends on the SPX are reinvested in the SPX the same day, net of withholding, in both portfolios: they sit inside the SPX market value and never appear as cash; "

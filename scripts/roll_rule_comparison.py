@@ -72,7 +72,7 @@ def main() -> None:
         "",
         f"Generated {date.today():%d %B %Y} by `scripts/roll_rule_comparison.py`. {len(starts):,} weekly starts, {starts[0]:%d %b %Y} → {starts[-1]:%d %b %Y}, "
         f"each held to {last:%d %b %Y}; the same loan portfolio (*Keep the loan*) on every row, the rotation under five roll rules. Default setup otherwise "
-        "(1 bn SPX, 250 m Lombard loan at SOFR + 75 bp capitalised, lending values 75 % SPX / 0 % calls / 90 % T-bills, 5-year ATM calls on SPXFP, 52 weekly steps, 15 % withholding). "
+        "(1 bn SPX, 250 m Lombard loan at SOFR + 75 bp capitalised, lending values 75 % SPX / 0 % calls / 90 % T-bills, the bank calling at 90 % of the lending value, 5-year ATM calls on SPXFP, 52 weekly steps, 15 % withholding). "
         f"Settled starts: on or before {settled_cut:%d %b %Y}, so every call has expired at least once; unsettled: later starts, whose NAV today is partly a model mark. "
         "The annualised blocks use the starts held at least a year. USD m unless stated.",
         "",

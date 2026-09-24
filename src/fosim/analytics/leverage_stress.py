@@ -5,7 +5,8 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
 
     A (current):  E_A(t) = E₀ · TR(t)/TR(t₀);  L(t) accrues daily, simple ACT/360, capitalised
                   lending value LV_A = ℓ_E · E_A (the most the bank lends against the equity);  LTV_A = L / LV_A
-                  headroom_A = LV_A − L   (spare borrowing capacity; < 0 is a margin call, LTV > 100 %, |·| the cure amount)
+                  headroom_A = m · LV_A − L   (room before the margin call, which the bank makes when the loan exceeds m = 90 % of the
+                  lending value, ``margin_call``; < 0 is a margin call, LTV > m, |·| the cure amount)
     B (rotation): in weekly steps over a year (default; or one shot), sell x_w of equity, buy an ATM call on SPXFP with
                   notional N_w = x_w / δ_w so that δ_w · N_w replaces the exposure sold (δ_w = the model delta of the ATM call
                   that day, ≈ 45–55 %), premium c_w · N_w, and the cash x_w − c_w · N_w repays an equal share of the loan
@@ -20,7 +21,7 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
                   payoff, then cash, then by selling equity delta-for-delta (the share of the tranche the SPX pays for gives up
                   δ · its notional of SPX, the excess over the premium goes to T-bills); the payoff left over: T-bills, equity or
                   more calls. A call that expires worthless is replaced (``replace_worthless=True``, default) or lapses
-                  dry powder_B = capacity_B − loan_B (an optional cash buffer can be kept at t₀)
+                  dry powder_B = m · capacity_B − loan_B (an optional cash buffer can be kept at t₀)
                   capacity_B = ℓ_E · E_B + ℓ_C · call value + ℓ_T · cash   (the lending value of what is held; the cash is in T-bills)
 
 NAV_A = E_A − L, NAV_B = E_B + call value + cash. The accounting identity ΔNAV = market P&L − interest (+ cash
@@ -136,13 +137,15 @@ def _nearest_index(dates: np.ndarray, target: np.datetime64) -> int:
 
 def simulate(
     start: str | pd.Timestamp, end: str | pd.Timestamp, equity0: float = 1000e6, loan0: float = 250e6, spread: float = 0.0075,
-    ltv_equity: float = 0.75, ltv_call: float = 0.0, ltv_cash: float = 0.90, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
+    ltv_equity: float = 0.75, ltv_call: float = 0.0, ltv_cash: float = 0.90, margin_call: float = 0.90, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
     surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = True,
     roll: str = "target", rebalance: str = "quarterly", band: float = 0.10, unwind_haircut: float = 0.01, below: str = "calls",
     file: Path | str | None = None,
 ) -> tuple[pd.DataFrame, StressInfo]:
     """Daily path of both setups from ``start`` to ``end`` (nearest trading days). See the module docstring.
 
+    ``margin_call``: the share of the lending value at which the bank calls (0.90 default, PLACEHOLDER): the room before a margin call
+    is margin_call × lending value − loan for both portfolios (``headroom_A``, ``dry_powder_B``); LTV itself stays loan ÷ lending value.
     ``surplus``: what B does with payoff cash left after paying the roll premium — ``"cash"`` (T-bills), ``"equity"`` (buy SPX)
     or ``"calls"`` (buy more ATM calls at the same premium fraction, so the whole payoff stays exposed to the index).
     ``roll``: what an expiring call is replaced on. ``"target"`` (default): the gap between Keep's SPX value E_A and what the rotation's
@@ -175,8 +178,8 @@ def simulate(
     """
     if equity0 <= 0 or loan0 < 0 or tenor <= 0 or cash_buffer < 0:
         raise ValueError("equity0 and tenor must be positive, loan0 and cash_buffer non-negative")
-    if not 0.0 < ltv_equity <= 1.0 or not 0.0 <= ltv_call <= 1.0 or not 0.0 <= ltv_cash <= 1.0 or not 0.0 <= wht < 1.0:
-        raise ValueError("ltv_equity in (0, 1], ltv_call and ltv_cash in [0, 1], wht in [0, 1)")
+    if not 0.0 < ltv_equity <= 1.0 or not 0.0 <= ltv_call <= 1.0 or not 0.0 <= ltv_cash <= 1.0 or not 0.0 <= wht < 1.0 or not 0.0 < margin_call <= 1.0:
+        raise ValueError("ltv_equity and margin_call in (0, 1], ltv_call and ltv_cash in [0, 1], wht in [0, 1)")
     if delta is not None and not 0.0 < delta <= 1.0:
         raise ValueError("delta must be in (0, 1] or None for the model delta")
     if int(build_tranches) < 1:
@@ -536,8 +539,8 @@ def simulate(
     lv_B = ltv_equity * E_B + ltv_call * call_val + ltv_cash * cash_B   # the lending value of what B holds: SPX, calls, T-bills
     out = pd.DataFrame({
         "spx_tr": tr, "spxfp": S, "drawdown": drawdown, "loan_rate": base + spread,
-        "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
-        "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": lv_B - loan_B_arr, "nav_B": nav_B,
+        "E_A": E_A, "loan": loan, "lending_value_A": ltv_equity * E_A, "ltv_A": loan / (ltv_equity * E_A), "headroom_A": margin_call * ltv_equity * E_A - loan, "nav_A": nav_A, "interest_A": interest, "eq_pnl_A": eq_pnl_A,
+        "E_B": E_B, "call_val": call_val, "call_notional": call_notional, "cash_B": cash_B, "loan_B": loan_B_arr, "cap_B": lv_B, "dry_powder_B": margin_call * lv_B - loan_B_arr, "nav_B": nav_B,
         "exposure_A": E_A, "exposure_B": E_B + deltas, "exposure_replaced_B": exposure_B,   # live dollar delta (SPX + Σ units·δ·S of the calls); what the holdings were bought to carry (SPX + Σ δ_buy·N·TR(t)/TR(buy))
         "unwind_cost_B": unwind, "unwind_cost_cum_B": np.cumsum(unwind),
         "eq_pnl_B": eq_pnl_B, "call_pnl_B": call_pnl_B, "cash_int_B": cash_int, "interest_B": interest_B, "roll": is_roll, "n_calls": n_calls,

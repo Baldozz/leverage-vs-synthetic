@@ -1,6 +1,6 @@
 # Keep the loan, or rotate into calls — historical decision tool (USD only)
 
-**The question.** An illustrative portfolio (default inputs, all editable): 1 bn in SPX with a 250 m Lombard loan on it (lending value 75 %, SOFR + 75 bp, interest
+**The question.** An illustrative portfolio (default inputs, all editable): 1 bn in SPX with a 250 m Lombard loan on it (lending value 75 %, the bank calling at 90 % of it, SOFR + 75 bp, interest
 capitalised). Option 1, **Keep the loan**: nothing changes. Option 2, **Rotate into calls**: week by week sell SPX,
 buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so the SPX-equivalent exposure stays
 1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. At every expiry the

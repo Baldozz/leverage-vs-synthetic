@@ -107,6 +107,13 @@ def test_all_starts_page_weekly_grid() -> None:
     assert all(n_ == pytest.approx(b_ - a_, abs=1e-9) for a_, b_, n_ in zip(dp[0]["y"], dp[1]["y"], dp[5]["y"], strict=True))
     j_a = min(range(1513), key=lambda j: dp[0]["y"][j])
     assert dp[6]["x"] == [dp[0]["x"][j_a]] and dp[6]["y"][0] == pytest.approx(dp[0]["y"][j_a])   # the lowest room before a margin call, marked
+    dp_lay = json.loads(at.get("plotly_chart")[3].proto.spec)["layout"]
+    j_l = max(range(1513), key=lambda j: dp[2]["y"][j])
+    assert any(a["text"] == f"<span style='color:#c9a000'><b>LTV {dp[2]['y'][j_l]:.0f} %</b></span> · {pd.Timestamp(dp[2]['x'][j_l]):%d %b %Y}" for a in dp_lay["annotations"])   # the highest LTV labelled in yellow
+    assert any(a["text"] == "margin call (LTV 90%)" for a in dp_lay["annotations"]) and dp[2]["marker"]["cmax"] == 90.0 and dp[2]["marker"]["colorbar"]["orientation"] == "h"   # the call level at 90 %, the colour bar at the bottom
+    for i_ in (2, 3, 4):   # the three charts by date share fixed margins, so their plot areas line up
+        lay_i = json.loads(at.get("plotly_chart")[i_].proto.spec)["layout"]
+        assert lay_i["margin"]["l"] == 80 and lay_i["margin"]["r"] == 80 and lay_i["yaxis"]["automargin"] is False
     # the profiles beside the fans: the lowest, median and highest final NAV are labelled on the right axis
     fan_a = json.loads(at.get("plotly_chart")[0].proto.spec)["layout"]["yaxis2"]
     assert [t.split(" ")[0] for t in fan_a["ticktext"]] == ["min", "median", "max"] and fan_a["tickvals"][0] == pytest.approx(min(ka["y"])) and fan_a["tickvals"][2] == pytest.approx(max(ka["y"]))
@@ -125,7 +132,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert [round(v) for v in bottoms["SPX at the bottom"]] == [777, 677, 2237, 3577] and [str(d) for d in bottoms["Previous peak"]] == ["2000-03-24", "2007-10-09", "2020-02-19", "2022-01-03"]
     assert list(bottoms.columns[-2:]) == ["Lowest NAV, Keep the loan", "Lowest NAV, Rotate into calls"] and bottoms.iloc[:, -2:].notna().all().all()
     gfc = at.table[2].value   # one table per bottom, in order: 2002, 2009, 2020, 2022; the GFC bottom's worst levered trajectory started on the dot-com peak day
-    detail = ["started on", "NAV", "SPX held, market value", "T-bills (cash)", "calls held, market value", "loan", "lending value of the holdings", "dry powder = lending value − loan", "interest cumulated"]
+    detail = ["started on", "NAV", "SPX held, market value", "T-bills (cash)", "calls held, market value", "loan", "lending value of the holdings", "dry powder = 90% × lending value − loan", "interest cumulated"]
     assert list(gfc.columns) == cols_
     # one block (the lowest NAV that day, both strategies read on it), then the count row
     assert list(gfc.iloc[:10, 0]) == ["Worst trajectory: the lowest NAV that day", *detail] and gfc.iloc[10, 0] == "rotation has more dry powder on" and len(gfc) == 11
@@ -133,10 +140,10 @@ def test_all_starts_page_weekly_grid() -> None:
     # the worst trajectory: the lowest NAV that day in either portfolio (Keep, the 24 Mar 2000 start), both strategies read on that start, Δ on every row
     assert gfc.iloc[1, 1] == "24 Mar 2000, 2755 days before the peak, SPX 1,527 (-2.4% vs the peak)" and gfc.iloc[1, 2] == "same start (the lowest NAV that day: Keep the loan)" and gfc.iloc[1, 3] == ""
     assert gfc.iloc[2, 1].startswith("142 m (-81% from the start)")
-    assert gfc.iloc[8, 1].startswith("381 − 366 = 15 m (LTV 96%")   # the loan is deducted: 381 − 366 = 15
     # the cells are the daily simulation's values on 9 Mar 2009 for the 24 Mar 2000 start: recompute it directly
     pa, _ = simulate("2000-03-24", "2026-09-14", roll="delta")
     da = pa.loc["2009-03-09"]
+    assert gfc.iloc[8, 1].startswith(f"{0.9 * 0.75 * da['E_A'] / m:,.0f} − {da['loan'] / m:,.0f} = {da['headroom_A'] / m:,.0f} m (LTV {da['ltv_A']:.0%}") and da["headroom_A"] < 0 < 0.75 * da["E_A"] - da["loan"]   # 343 − 366 = −23: in margin call at the 90 % level (not at 100 %: 381 − 366 = 15)
     assert gfc.iloc[2, 1] == f"{da['nav_A'] / m:,.0f} m ({da['nav_A'] / m / 750 - 1:+.0%} from the start)" and gfc.iloc[2, 2] == f"{da['nav_B'] / m:,.0f} m ({da['nav_B'] / m / 750 - 1:+.0%} from the start)" and gfc.iloc[2, 3] == pm(da["nav_B"] - da["nav_A"])
     assert gfc.iloc[3, 1] == f"{da['E_A'] / m:,.0f} m" and gfc.iloc[3, 2] == f"{da['E_B'] / m:,.0f} m" and gfc.iloc[3, 3] == pm(da["E_B"] - da["E_A"])
     assert gfc.iloc[4, 1] == "—" and gfc.iloc[4, 2] == f"{da['cash_B'] / m:,.0f} m" and gfc.iloc[4, 3] == pm(da["cash_B"])   # T-bills: the payoffs kept in cash (none here: the 2005 expiries were worthless)
@@ -147,8 +154,9 @@ def test_all_starts_page_weekly_grid() -> None:
     assert da["nav_B"] > da["nav_A"] and da["dry_powder_B"] > da["headroom_A"] and 200e6 < da["nav_B"] < 300e6   # ≈ 245 m against 142 m: the 2005 replacements, paid with SPX, kept the convexity
     lv_b = 0.75 * da["E_B"] + 0.0 * da["call_val"] + 0.9 * da["cash_B"]   # the lending value of what the rotation holds: SPX 75 %, calls 0 %, T-bills 90 % (sidebar defaults)
     assert gfc.iloc[7, 1] == f"{0.75 * da['E_A'] / m:,.0f} m (75% of the SPX)" and gfc.iloc[7, 2] == f"{lv_b / m:,.0f} m (75% of the SPX + 0% of the calls + 90% of the T-bills)" and gfc.iloc[7, 3] == pm(lv_b - 0.75 * da["E_A"])
-    assert gfc.iloc[8, 1].endswith(f"= {da['headroom_A'] / m:,.0f} m (LTV {da['ltv_A']:.0%}: a further 4% SPX fall to a margin call)") and gfc.iloc[8, 2] == f"{lv_b / m:,.0f} − 0 = {da['dry_powder_B'] / m:,.0f} m"
-    assert gfc.iloc[8, 3] == pm(da["dry_powder_B"] - da["headroom_A"]) and da["dry_powder_B"] == pytest.approx(lv_b - da["loan_B"]) and da["dry_powder_B"] > da["headroom_A"] and da["nav_B"] > da["nav_A"]
+    assert gfc.iloc[8, 1].endswith(f"= {da['headroom_A'] / m:,.0f} m (LTV {da['ltv_A']:.0%}: above the 90% call level, in margin call)") and gfc.iloc[8, 2] == f"{0.9 * lv_b / m:,.0f} − 0 = {da['dry_powder_B'] / m:,.0f} m"
+    assert gfc.iloc[8, 3] == pm(da["dry_powder_B"] - da["headroom_A"]) and da["dry_powder_B"] == pytest.approx(0.9 * lv_b - da["loan_B"]) and da["dry_powder_B"] > da["headroom_A"] and da["nav_B"] > da["nav_A"]
+    assert 0.9 < da["ltv_A"] < 1.0   # LTV 96 %: called at the 90 % level, not at 100 %
     # the interest cumulated on each loan since the start (Rotate: only during the build)
     assert gfc.iloc[9, 1] == f"{da['interest_cum_A'] / m:,.0f} m" and gfc.iloc[9, 2] == f"{da['interest_cum_B'] / m:,.0f} m (during the build)" and gfc.iloc[9, 3] == pm(da["interest_cum_B"] - da["interest_cum_A"])
     assert da["interest_cum_A"] == pytest.approx(pa.loc[:"2009-03-09", "interest_A"].sum())
@@ -197,8 +205,11 @@ def test_all_starts_page_weekly_grid() -> None:
     assert pct(stats.iloc[4, 1]) < 0 and pct(stats.iloc[1, 1]) < -0.15   # at the GFC bottom most starts are under water
     assert len(at.table) == 2 and len(at.dataframe) == 1 and len(at.dataframe[0].value) == 1   # distribution + the one tab of the chosen bottom; the corrections table lists that bottom only
     assert list(at.dataframe[0].value["Correction"]) == ["2007–2009"] and "At the 2007–2009 bottom" in " ".join(h.value for h in at.subheader)
-    assert at.table[1].value.iloc[8, 1].startswith("381 − 366 = 15 m (LTV 96%")   # the worst levered trajectory at the bottom, same as when held to today
-    assert any("lost **all** its calls" in m.value for m in at.markdown) and any("Margin calls keeping the loan: **0** of the" in m.value for m in at.markdown)
+    assert at.table[1].value.iloc[8, 1].startswith(f"{0.9 * 0.75 * da['E_A'] / m:,.0f} − {da['loan'] / m:,.0f} = {da['headroom_A'] / m:,.0f} m (LTV {da['ltv_A']:.0%}")   # the worst levered trajectory at the bottom, same as when held to today
+    from fosim.analytics.leverage_stress import rolling_starts
+    rs_b = rolling_starts(pd.date_range("1997-09-09", bottom - pd.DateOffset(days=7), freq="W-FRI"), 0.0, until=bottom, roll="delta")   # the page's starts held to the bottom: the margin calls at the 90 % level
+    n_calls_b = int(rs_b["A: margin call"].sum())
+    assert n_calls_b >= 1 and any("lost **all** its calls" in m.value for m in at.markdown) and any(f"Margin calls keeping the loan: **{n_calls_b:,}** of the" in m.value for m in at.markdown)
     # under the default rules nothing lapses: no orange line
     at.selectbox(key="r_end").set_value(at.selectbox(key="r_end").options[0]).run()
     at.button(key="r_launch").click().run()

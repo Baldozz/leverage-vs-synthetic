@@ -42,6 +42,7 @@ def main() -> None:
     ap.add_argument("--lv", type=float, default=75.0, help="lending value of the SPX, %%")
     ap.add_argument("--lv-calls", type=float, default=0.0, help="lending value of the calls, %%")
     ap.add_argument("--lv-cash", type=float, default=90.0, help="lending value of the T-bills the rotation holds, %%")
+    ap.add_argument("--margin-call", type=float, default=90.0, help="the bank calls when the loan exceeds this share of the lending value, %%")
     ap.add_argument("--tenor", type=float, default=5.0, help="years")
     ap.add_argument("--weeks", type=int, default=52, help="weekly steps of the rotation (1 = one shot)")
     ap.add_argument("--wht", type=float, default=15.0, help="dividend withholding tax, %%")
@@ -68,7 +69,7 @@ def main() -> None:
     t = time.perf_counter()
     print(f"{len(starts):,} start dates {starts[0].date()} → {starts[-1].date()}, held to {last.date()}, sampled every {a.sample} …", flush=True)
     rows, paths = rolling_paths(starts, last, columns=PATH_COLUMNS, sample=a.sample, progress=lambda i, n: print(f"  {i:,}/{n:,}", end="\r", flush=True),
-                                equity0=a.equity * 1e6, loan0=a.loan * 1e6, spread=a.spread / 1e4, ltv_equity=a.lv / 100, ltv_call=a.lv_calls / 100, ltv_cash=a.lv_cash / 100, tenor=a.tenor, wht=a.wht / 100,
+                                equity0=a.equity * 1e6, loan0=a.loan * 1e6, spread=a.spread / 1e4, ltv_equity=a.lv / 100, ltv_call=a.lv_calls / 100, ltv_cash=a.lv_cash / 100, margin_call=a.margin_call / 100, tenor=a.tenor, wht=a.wht / 100,
                                 surplus=a.surplus, build_tranches=a.weeks, replace_worthless=a.worthless == "replace", roll=a.roll,
                                 rebalance=a.rebalance, band=a.band / 100, unwind_haircut=a.haircut / 100, below=a.below)
     tbl = paths_table(paths)

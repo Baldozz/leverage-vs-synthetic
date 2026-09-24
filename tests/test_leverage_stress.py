@@ -75,12 +75,14 @@ def test_margin_call_date_matches_closed_form(tmp_path: Path) -> None:
     n = 500
     spx = 1000.0 * (1.0 - 0.8 * np.arange(n) / (n - 1))   # linear fall to −80 %
     f = _file(tmp_path, spx, base=0.0, tbill=0.0)
-    p, _ = simulate("2010-01-04", "2011-12-01", spread=0.0, ltv_equity=0.75, build_tranches=1, file=f)
-    decline = 1.0 - p["E_A"] / p["E_A"].iloc[0]
-    first_call = p.index[(p["headroom_A"] < 0).to_numpy().argmax()]
-    # closed form: the loan (frozen at 250 with zero rates) meets the lending value 0.75 · E when E has fallen by 1 − 250/750 = 2/3
-    assert decline.loc[first_call] > 2 / 3 and decline.shift(1).loc[first_call] <= 2 / 3
-    assert p.loc[first_call, "ltv_A"] > 1.0 and p["ltv_A"].shift(1).loc[first_call] <= 1.0   # LTV = loan / lending value crosses 100 %
+    for m_call, thr in ((0.9, 1 - 250 / (0.9 * 750)), (1.0, 2 / 3)):   # the bank calls at 90 % of the lending value (default) or at the whole of it
+        p, _ = simulate("2010-01-04", "2011-12-01", spread=0.0, ltv_equity=0.75, margin_call=m_call, build_tranches=1, file=f)
+        decline = 1.0 - p["E_A"] / p["E_A"].iloc[0]
+        first_call = p.index[(p["headroom_A"] < 0).to_numpy().argmax()]
+        # closed form: the loan (frozen at 250 with zero rates) meets m · 0.75 · E when E has fallen by 1 − 250/(m · 750)
+        assert decline.loc[first_call] > thr and decline.shift(1).loc[first_call] <= thr
+        assert p.loc[first_call, "ltv_A"] > m_call and p["ltv_A"].shift(1).loc[first_call] <= m_call   # LTV = loan / lending value crosses the call level
+        assert np.allclose(p["headroom_A"], m_call * 0.75 * p["E_A"] - p["loan"]) and np.allclose(p["ltv_A"], p["loan"] / (0.75 * p["E_A"]))
 
 
 def test_roll_cash_flows_rising_and_falling(tmp_path: Path) -> None:
@@ -144,9 +146,9 @@ def test_cash_buffer_is_kept_after_the_rotation(tmp_path: Path) -> None:
     f = _file(tmp_path, np.full(300, 1000.0), base=0.0, tbill=0.0, rate=0.0)
     p, info = simulate("2010-01-04", "2011-02-25", loan0=250 * M, cash_buffer=100 * M, build_tranches=1, file=f)
     assert info.rotation == pytest.approx(350 * M / (1 - info.premium0 / info.delta0))
-    assert p["cash_B"].iloc[0] == 100 * M and p["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] + 0.9 * 100 * M)   # the T-bills count at their lending value (90 % default)
-    p_full, _ = simulate("2010-01-04", "2011-02-25", loan0=250 * M, cash_buffer=100 * M, build_tranches=1, ltv_cash=1.0, file=f)
-    assert p_full["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] + 100 * M) and p_full["nav_B"].iloc[0] == pytest.approx(p["nav_B"].iloc[0])   # 100 % = the cash itself; the NAV does not depend on it
+    assert p["cash_B"].iloc[0] == 100 * M and p["dry_powder_B"].iloc[0] == pytest.approx(0.9 * (0.75 * p["E_B"].iloc[0] + 0.9 * 100 * M))   # the T-bills count at their lending value (90 % default); the call comes at 90 % of the lending value
+    p_full, _ = simulate("2010-01-04", "2011-02-25", loan0=250 * M, cash_buffer=100 * M, build_tranches=1, ltv_cash=1.0, margin_call=1.0, file=f)
+    assert p_full["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] + 100 * M) and p_full["nav_B"].iloc[0] == pytest.approx(p["nav_B"].iloc[0])   # 100 % = the cash itself, the call at the whole lending value; the NAV does not depend on it
     assert p["nav_B"].iloc[0] == pytest.approx(750 * M)   # still NAV-neutral on day one
     with pytest.raises(ValueError):
         simulate("2010-01-04", "2011-02-25", cash_buffer=-1.0, build_tranches=1, file=f)
@@ -238,7 +240,7 @@ def test_rolling_paths_match_the_single_paths(tmp_path: Path) -> None:
 def test_input_validation(tmp_path: Path) -> None:
     f = _file(tmp_path, np.full(50, 1000.0))
     for kw in ({"equity0": 0.0}, {"ltv_equity": 1.5}, {"ltv_cash": 1.5}, {"surplus": "gold"}, {"roll": "gold"}, {"tenor": 0.0}, {"build_tranches": 0},
-               {"rebalance": "weekly"}, {"below": "gold"}, {"band": 1.0}, {"band": -0.1}, {"unwind_haircut": -0.01}):
+               {"rebalance": "weekly"}, {"below": "gold"}, {"band": 1.0}, {"band": -0.1}, {"unwind_haircut": -0.01}, {"margin_call": 0.0}, {"margin_call": 1.5}):
         with pytest.raises(ValueError):
             simulate("2010-01-04", "2010-03-01", file=f, **kw)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
@@ -289,7 +291,7 @@ def test_weekly_ladder_repays_the_loan_step_by_step(tmp_path: Path) -> None:
     assert p["nav_B"].iloc[0] == pytest.approx(750 * M) and abs(p["nav_B"].iloc[kb[-1]] - p["nav_A"].iloc[kb[-1]]) < 0.02 * 750 * M   # NAV-neutral steps; only time value lost
     assert p["exposure_replaced_B"].iloc[kb[-1]] == pytest.approx(1000 * M)   # delta exposure fully replaced after the build (at the purchase deltas)
     assert p["exposure_B"].iloc[kb[-1]] == pytest.approx(1000 * M, rel=2e-3) and p["exposure_B"].iloc[kb[-1]] != pytest.approx(1000 * M)   # live: the first tranches' delta has drifted with three weeks of time decay
-    assert p["dry_powder_B"].iloc[0] == pytest.approx(0.75 * p["E_B"].iloc[0] - 187.5 * M)   # lending value − loan left + cash
+    assert p["dry_powder_B"].iloc[0] == pytest.approx(0.9 * 0.75 * p["E_B"].iloc[0] - 187.5 * M)   # 90 % of the lending value − the loan left
     # each tranche rolls at its own expiry: four rolls a week apart five years later
     assert len(info.rolls) == 4 and (info.rolls[-1].date - info.rolls[0].date).days == 21
     gap_b = p["nav_B"].diff().to_numpy()[1:] - (p["eq_pnl_B"] + p["call_pnl_B"] + p["cash_int_B"] - p["interest_B"]).to_numpy()[1:]
@@ -404,7 +406,7 @@ def test_cumulative_cost_columns_match_the_summary() -> None:
     first_itm = next(r.date for r in info.rolls if r.payoff > 0.0)
     assert (p.loc[: first_itm, "cash_B"].iloc[:-1] == 0.0).all() and p.loc[first_itm, "cash_B"] > 0.0 and (p.loc[first_itm:, "cash_B"] > 0.0).all()
     assert p["cash_B"].iloc[-1] == pytest.approx(sum(r.payoff - r.premium_paid + r.equity_sold for r in info.rolls) + p["cash_int_B"].sum())
-    assert np.allclose(p["dry_powder_B"], 0.75 * p["E_B"] + 0.0 * p["call_val"] + 0.9 * p["cash_B"] - p["loan_B"]) and (p["dry_powder_B"] - 0.75 * p["E_B"]).iloc[-1] == pytest.approx(0.9 * p["cash_B"].iloc[-1])
+    assert np.allclose(p["dry_powder_B"], 0.9 * (0.75 * p["E_B"] + 0.0 * p["call_val"] + 0.9 * p["cash_B"]) - p["loan_B"]) and (p["dry_powder_B"] - 0.9 * 0.75 * p["E_B"]).iloc[-1] == pytest.approx(0.9 * 0.9 * p["cash_B"].iloc[-1])
     assert np.allclose(p["cap_B"], 0.75 * p["E_B"] + 0.9 * p["cash_B"])
     assert np.allclose(p["nav_B"], p["E_B"] + p["call_val"] + p["cash_B"] - p["loan_B"])
     # dividends: received on the SPX held, net of withholding, reinvested the same day — never paid out, never used for the interest (which is capitalised).

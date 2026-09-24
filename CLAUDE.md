@@ -1,7 +1,7 @@
 # CLAUDE.md — project conventions (binding)
 
 Investment decision-support tool. **The live question** (`README.md`): 1 bn in SPX with a
-250 m Lombard loan (lending value 75 %, SOFR + 75 bp, interest capitalised) — **Keep the loan**, or **Rotate into
+250 m Lombard loan (lending value 75 %, margin call at 90 % of it, SOFR + 75 bp, interest capitalised) — **Keep the loan**, or **Rotate into
 calls**: week by week sell SPX, buy 5-year ATM calls on SPXFP sized by the model delta, repay the loan; at every
 expiry the replacement closes the gap to Keep's exposure (SPX + the calls' live dollar delta), and every quarter-end the
 exposure is brought back inside ±10 % of Keep's (calls sold at the mark less 1 vol point / calls bought from the T-bills);

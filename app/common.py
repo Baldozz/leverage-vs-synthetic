@@ -31,6 +31,7 @@ class Setup:
     lv_equity: float       # lending value of the equity, fraction
     lv_calls: float        # lending value of the calls, fraction
     lv_cash: float         # lending value of the T-bills the rotation holds, fraction
+    margin_call: float     # the share of the lending value at which the bank calls, fraction
     wht: float             # dividend withholding tax, fraction
     tenor: float           # years
     build: int             # weekly steps of the rotation (1 = one shot)
@@ -84,7 +85,7 @@ def _wht_widget(help_: str) -> None:
 def sidebar_setup() -> Setup:
     """Page 1's sidebar: the two portfolios. Drawn by the entry script when that page is shown; read back with ``setup``. The page itself
     runs only what its *Launch simulation* button last launched (the sidebar setup, the grid, the start year and the end day)."""
-    for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_weeks", 52), ("s_worthless", "replaced, SPX sold to pay it"), ("s_roll", "Keep's exposure"),
+    for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_margin", 90.0), ("s_weeks", 52), ("s_worthless", "replaced, SPX sold to pay it"), ("s_roll", "Keep's exposure"),
                  ("s_rebalance", "every quarter"), ("s_band", 10.0), ("s_haircut", 1.0), ("s_below", "ATM calls from the T-bills"),
                  ("s_surplus", "kept in T-bills"), ("s_lv_calls", 0.0), ("s_lv_cash", 90.0), ("s_grid", "every trading day")):
         _restore(k, v)
@@ -93,7 +94,8 @@ def sidebar_setup() -> Setup:
         st.number_input("SPX exposure (USD m)", 10.0, 100000.0, step=50.0, key="s_equity")
         st.number_input("Lombard loan (USD m)", 0.0, 100000.0, step=10.0, key="s_loan", help="Borrowed against the SPX; interest capitalised.")
         st.number_input("Spread over SOFR (bp)", 0.0, 500.0, step=5.0, key="s_spread", help="Base rate: 3-month LIBOR to 2018, Term SOFR after.")
-        st.number_input("Lending value of the SPX (%)", 1.0, 100.0, step=5.0, key="s_lv", help="The most the bank lends against the SPX. LTV = loan ÷ lending value; margin call above 100 %.")
+        st.number_input("Lending value of the SPX (%)", 1.0, 100.0, step=5.0, key="s_lv", help="The most the bank lends against the SPX. LTV = loan ÷ lending value.")
+        st.number_input("Margin call at LTV (%)", 1.0, 100.0, step=5.0, key="s_margin", help="The bank calls when the loan exceeds this share of the lending value (PLACEHOLDER 90 %). Dry powder = this share × the lending value of what is held − loan, for both portfolios.")
         st.markdown("**The rotation**")
         _tenor_widget()
         st.number_input("Weeks to complete the rotation", 1, 156, step=1, key="s_weeks", help="Each week: sell SPX, buy one tranche of ATM calls sized by delta, repay an equal share of the loan. 1 = all on the start date.")
@@ -113,7 +115,7 @@ def sidebar_setup() -> Setup:
             st.number_input("Lending value of the T-bills (%)", 0.0, 100.0, step=5.0, key="s_lv_cash", help="The most the bank lends against the T-bills the rotation holds (the payoffs kept in cash). PLACEHOLDER 90 %.")
             st.radio("Start dates", ["every trading day", "every week"], key="s_grid", help="Every trading day takes a few minutes the first time, then it is cached.")
         st.caption("Historical data only, September 1997 to today.")
-    _remember("s_equity", "s_loan", "s_spread", "s_lv", "s_tenor", "s_weeks", "s_wht", "s_roll", "s_rebalance", "s_band", "s_haircut", "s_below", "s_worthless", "s_surplus", "s_lv_calls", "s_lv_cash", "s_grid")
+    _remember("s_equity", "s_loan", "s_spread", "s_lv", "s_margin", "s_tenor", "s_weeks", "s_wht", "s_roll", "s_rebalance", "s_band", "s_haircut", "s_below", "s_worthless", "s_surplus", "s_lv_calls", "s_lv_cash", "s_grid")
     return setup()
 
 
@@ -121,7 +123,7 @@ def setup() -> Setup:
     """The Setup the sidebar widgets currently show (pages run after the entry script has drawn them)."""
     s = st.session_state
     return Setup(float(s["s_equity"]) * M, float(s["s_loan"]) * M, float(s["s_spread"]) / 1e4, float(s["s_lv"]) / 100.0, float(s["s_lv_calls"]) / 100.0, float(s["s_lv_cash"]) / 100.0,
-                 float(s["s_wht"]) / 100.0, float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"), _ROLL[str(s["s_roll"])],
+                 float(s["s_margin"]) / 100.0, float(s["s_wht"]) / 100.0, float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"), _ROLL[str(s["s_roll"])],
                  _REBALANCE[str(s["s_rebalance"])], float(s["s_band"]) / 100.0, float(s["s_haircut"]) / 100.0, _BELOW[str(s["s_below"])])
 
 
@@ -188,7 +190,7 @@ def _grid(first: str, last: str, freq: str) -> pd.DatetimeIndex:
 
 def _engine_kwargs(s: Setup) -> dict[str, object]:
     """The sidebar setup as ``simulate`` keyword arguments."""
-    return {"equity0": s.equity, "loan0": s.loan, "spread": s.spread, "ltv_equity": s.lv_equity, "ltv_call": s.lv_calls, "ltv_cash": s.lv_cash, "tenor": s.tenor, "wht": s.wht,
+    return {"equity0": s.equity, "loan0": s.loan, "spread": s.spread, "ltv_equity": s.lv_equity, "ltv_call": s.lv_calls, "ltv_cash": s.lv_cash, "margin_call": s.margin_call, "tenor": s.tenor, "wht": s.wht,
             "surplus": s.surplus, "cash_buffer": 0.0, "delta": None, "build_tranches": s.build, "replace_worthless": s.replace_worthless, "roll": s.roll,
             "rebalance": s.rebalance, "band": s.band, "unwind_haircut": s.haircut, "below": s.below}
 

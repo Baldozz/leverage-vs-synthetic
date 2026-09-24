@@ -1,6 +1,6 @@
 # Roll rules compared — every weekly start since 1997, held to today
 
-Generated 24 September 2026 by `scripts/roll_rule_comparison.py`. 1,513 weekly starts, 12 Sep 1997 → 04 Sep 2026, each held to 14 Sep 2026; the same loan portfolio (*Keep the loan*) on every row, the rotation under five roll rules. Default setup otherwise (1 bn SPX, 250 m Lombard loan at SOFR + 75 bp capitalised, lending values 75 % SPX / 0 % calls / 90 % T-bills, 5-year ATM calls on SPXFP, 52 weekly steps, 15 % withholding). Settled starts: on or before 22 Sep 2020, so every call has expired at least once; unsettled: later starts, whose NAV today is partly a model mark. The annualised blocks use the starts held at least a year. USD m unless stated.
+Generated 24 September 2026 by `scripts/roll_rule_comparison.py`. 1,513 weekly starts, 12 Sep 1997 → 04 Sep 2026, each held to 14 Sep 2026; the same loan portfolio (*Keep the loan*) on every row, the rotation under five roll rules. Default setup otherwise (1 bn SPX, 250 m Lombard loan at SOFR + 75 bp capitalised, lending values 75 % SPX / 0 % calls / 90 % T-bills, the bank calling at 90 % of the lending value, 5-year ATM calls on SPXFP, 52 weekly steps, 15 % withholding). Settled starts: on or before 22 Sep 2020, so every call has expired at least once; unsettled: later starts, whose NAV today is partly a model mark. The annualised blocks use the starts held at least a year. USD m unless stated.
 
 **The rules.** *Keep's exposure* (default): at every expiry the replacement closes the gap between Keep's SPX value and what the rotation's holdings were bought to carry (its SPX plus each surviving call's slot, grown with the index), so each replacement restores its own slot; paid from the payoff and the T-bills, then by selling SPX; every quarter-end the live exposure (SPX + the calls' dollar delta) is brought back inside ±10 % of Keep's — calls sold, most in the money first, at the model mark less 1 vol point (or at the mark: *no haircut*), calls bought from the T-bills (*SPX sold below the band*: and, once the T-bills are gone, from SPX sold for them, s = rest ÷ (δ/c − 1)). *Same dollar delta*: an in-the-money call is replaced by an ATM call with the same dollar delta (about twice the units; the option units double at every in-the-money expiry). *Same index units*: replaced on the same index units. Under the last two a worthless call is replaced on the same units, SPX is sold delta-for-delta and no band applies.
 
@@ -32,11 +32,11 @@ Generated 24 September 2026 by `scripts/roll_rule_comparison.py`. 1,513 weekly s
 
 | Today | Keep the loan | Keep's exposure (1 vol pt) | Keep's exposure (no haircut) | Keep's exposure (SPX sold below the band) | Same dollar delta | Same index units |
 |---|---|---|---|---|---|---|
-| dry powder today, median (m) | 5,375 | 4,479 | 4,493 | 4,624 | 4,405 | 4,551 |
+| dry powder today, median (m) | 4,795 | 4,031 | 4,043 | 4,162 | 3,965 | 4,096 |
 | calls / NAV today, median |  | 18% | 18% | 18% | 43% | 13% |
 | exposure ÷ Keep's today, median | 1.00 | 1.10 | 1.10 | 1.10 | 2.40 | 0.98 |
 | starts with a cut replacement |  | 0 | 0 | 0 | 0 | 0 |
-| margin calls (Keep) | 0 |  |  |  |  |  |
+| margin calls (Keep) | 30 |  |  |  |  |  |
 
 ## Unsettled starts (calls still open on the end day): value today (260 starts held at least a year)
 
@@ -66,7 +66,7 @@ Generated 24 September 2026 by `scripts/roll_rule_comparison.py`. 1,513 weekly s
 
 | Today | Keep the loan | Keep's exposure (1 vol pt) | Keep's exposure (no haircut) | Keep's exposure (SPX sold below the band) | Same dollar delta | Same index units |
 |---|---|---|---|---|---|---|
-| dry powder today, median (m) | 1,042 | 895 | 895 | 896 | 861 | 862 |
+| dry powder today, median (m) | 908 | 806 | 806 | 806 | 775 | 775 |
 | calls / NAV today, median |  | 17% | 17% | 17% | 18% | 18% |
 | exposure ÷ Keep's today, median | 1.00 | 1.10 | 1.10 | 1.10 | 1.15 | 1.12 |
 | starts with a cut replacement |  | 0 | 0 | 0 | 0 | 0 |
@@ -78,10 +78,10 @@ Lowest and median NAV of each portfolio on the bottom day across the starts runn
 
 | Bottom | starts | Keep: lowest / median NAV | Keep's exposure (1 vol pt): lowest / median NAV | Keep's exposure (no haircut): lowest / median NAV | Keep's exposure (SPX sold below the band): lowest / median NAV | Same dollar delta: lowest / median NAV | Same index units: lowest / median NAV | Keep's exposure (1 vol pt): more dry powder / higher NAV | Keep's exposure (no haircut): more dry powder / higher NAV | Keep's exposure (SPX sold below the band): more dry powder / higher NAV | Same dollar delta: more dry powder / higher NAV | Same index units: more dry powder / higher NAV |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 2000–2002 (09 Oct 2002) | 265 | 241 / 390 | 306 / 436 | 306 / 436 | 294 / 425 | 306 / 436 | 306 / 436 | 94% / 100% | 94% / 100% | 94% / 100% | 94% / 100% | 94% / 100% |
-| 2007–2009 (09 Mar 2009) | 600 | 142 / 293 | 211 / 384 | 211 / 384 | 232 / 384 | 225 / 384 | 234 / 393 | 96% / 100% | 96% / 100% | 96% / 100% | 96% / 100% | 96% / 100% |
-| 2020 (23 Mar 2020) | 1,176 | 413 / 1,772 | 416 / 1,834 | 416 / 1,835 | 416 / 1,935 | 416 / 1,821 | 416 / 1,806 | 93% / 86% | 93% / 86% | 99% / 97% | 50% / 73% | 79% / 68% |
-| 2022 (12 Oct 2022) | 1,309 | 503 / 3,003 | 508 / 3,089 | 508 / 3,097 | 508 / 3,186 | 508 / 3,666 | 508 / 2,986 | 42% / 90% | 43% / 90% | 46% / 97% | 26% / 94% | 38% / 70% |
+| 2000–2002 (09 Oct 2002) | 265 | 241 / 390 | 306 / 436 | 306 / 436 | 294 / 425 | 306 / 436 | 306 / 436 | 99% / 100% | 99% / 100% | 99% / 100% | 99% / 100% | 99% / 100% |
+| 2007–2009 (09 Mar 2009) | 600 | 142 / 293 | 211 / 384 | 211 / 384 | 232 / 384 | 225 / 384 | 234 / 393 | 99% / 100% | 99% / 100% | 99% / 100% | 99% / 100% | 99% / 100% |
+| 2020 (23 Mar 2020) | 1,176 | 413 / 1,772 | 416 / 1,834 | 416 / 1,835 | 416 / 1,935 | 416 / 1,821 | 416 / 1,806 | 96% / 86% | 96% / 86% | 100% / 97% | 59% / 73% | 85% / 68% |
+| 2022 (12 Oct 2022) | 1,309 | 503 / 3,003 | 508 / 3,089 | 508 / 3,097 | 508 / 3,186 | 508 / 3,666 | 508 / 2,986 | 70% / 90% | 72% / 90% | 73% / 97% | 31% / 94% | 46% / 70% |
 
 ## The target rule's mechanics
 
@@ -102,4 +102,4 @@ Lowest and median NAV of each portfolio on the bottom day across the starts runn
 
 Each replacement restores its own slot, so the weekly ladder survives the expiries; the band sales remove whole tranches over time. Between quarterly checks the live exposure drifts with the delta; on the check days it is inside the band unless the T-bills were short (partial).
 
-Run time 696 s.
+Run time 694 s.
