@@ -301,14 +301,23 @@ if not ratio_w.empty:
     if s.roll == "target" and s.rebalance != "none":
         for edge in (1.0 + s.band, 1.0 - s.band):
             fig.add_hline(y=edge, line={"color": ORANGE, "width": 1, "dash": "dash"}, annotation={"text": f"band edge {edge:.2f}", "font": {"size": 10, "color": ORANGE}}, annotation_position="top left")
-    fig.update_yaxes(title_text="rotation's exposure ÷ Keep's", rangemode="tozero")
-    fig.update_xaxes(title_text="Date")
+    for r_ in corr[corr["trough"] <= end_day].itertuples():   # the same peak / bottom lines as the two charts above
+        for day, dash, what in ((r_.peak, "dot", "peak"), (r_.trough, "dash", "bottom")):
+            fig.add_vline(x=day.timestamp() * 1000, line={"color": GREY, "width": 1, "dash": dash})
+            fig.add_annotation(x=day, y=1, yref="y domain", text=f"{what} {day:%b %Y}", showarrow=False, font={"size": 10, "color": GREY}, xanchor="left", yanchor="top")
+    in_x = (med.index >= x_win[0]) & (med.index <= x_win[1])   # the axis follows the values inside the window and always shows the band
+    y_lo = min(float(lo5[in_x].min()) if in_x.any() else 1.0, 1.0 - s.band) - 0.05
+    y_hi = max(float(hi95[in_x].max()) if in_x.any() else 1.0, 1.0 + s.band) + 0.05
+    fig.update_yaxes(title_text="rotation's exposure ÷ Keep's", range=[y_lo, y_hi], dtick=0.05, tickformat=".2f")
+    fig.update_xaxes(title_text="Date", range=x_win)   # the same window as the two charts above: they end on the same vertical line
     fig.update_layout(height=380, title={"text": f"Live exposure of the rotation ÷ Keep's SPX value, month by month across the {len(sel_all):,} selected starts", "x": 0.02, "font": {"size": 15}},
                       **{**LAYOUT, "legend": {"orientation": "h", "y": -0.2, "x": 0, "yanchor": "top"}})
     st.plotly_chart(fig, width="stretch")
     st.caption("The rotation's live exposure (its SPX plus the dollar delta of its calls, model delta of the day) divided by Keep's SPX value, on each month-end, across the selected starts alive on that date: "
-               "median and 5th–95th percentile band. It is 1 on every start day and, under *Keep's exposure*, 1 again after every roll and inside the band on every funded check day "
-               "(dashed lines); between checks it drifts with the calls' delta — up in a rally, down in a fall. Under the two earlier rules it shows how far the exposure runs from Keep's.")
+               "median and 5th–95th percentile band. It is 1 on every start day and, under *Keep's exposure*, inside the band on every funded check day (dashed lines) and back to 1 "
+               "at a roll when no other call survives; between checks it drifts with the calls' delta — up in a rally, down in a fall — and below the band it can only be raised with T-bills "
+               "(nothing is sold to fund it), so early starts sit under the band through a long fall until their first payoff. Same window as the two charts above. "
+               "Under the two earlier rules it shows how far the exposure runs from Keep's.")
 
 # ---------------- statistics of the final NAV over the selected starts (every start of the selected years, not subsampled)
 nav0 = (s.equity - s.loan) / M
