@@ -35,10 +35,12 @@ class Setup:
     tenor: float           # years
     build: int             # weekly steps of the rotation (1 = one shot)
     surplus: str           # "cash" | "equity" | "calls"
-    replace_worthless: bool = False   # a call that expires worthless: lapses (False) or is replaced, SPX sold to pay (True)
+    replace_worthless: bool = True    # a call that expires worthless: replaced on the same index units, SPX sold to pay (True) or lapses (False)
+    roll: str = "delta"               # what an in-the-money call is replaced on: "delta" (the same dollar delta) or "units" (the same index units)
 
 
 _SURPLUS = {"kept in T-bills": "cash", "reinvested in SPX": "equity", "reinvested in more calls": "calls"}
+_ROLL = {"the same dollar delta": "delta", "the same index units": "units"}
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ def _wht_widget(help_: str) -> None:
 def sidebar_setup() -> Setup:
     """Page 1's sidebar: the two portfolios. Drawn by the entry script when that page is shown; read back with ``setup``. The page itself
     runs only what its *Launch simulation* button last launched (the sidebar setup, the grid, the start year and the end day)."""
-    for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_weeks", 52), ("s_worthless", "not replaced"),
+    for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_weeks", 52), ("s_worthless", "replaced, SPX sold to pay it"), ("s_roll", "the same dollar delta"),
                  ("s_surplus", "kept in T-bills"), ("s_lv_calls", 0.0), ("s_lv_cash", 90.0), ("s_grid", "every trading day")):
         _restore(k, v)
     with st.sidebar:
@@ -90,13 +92,14 @@ def sidebar_setup() -> Setup:
         st.number_input("Weeks to complete the rotation", 1, 156, step=1, key="s_weeks", help="Each week: sell SPX, buy one tranche of ATM calls sized by delta, repay an equal share of the loan. 1 = all on the start date.")
         with st.expander("Advanced"):
             _wht_widget("On the dividends of the SPX held. Common to both pages.")
-            st.radio("A call that expires worthless is", ["not replaced", "replaced, SPX sold to pay it"], key="s_worthless", help="A call that expires in the money is always replaced by a new ATM call on the same index units, paid from the payoff, then cash, then by selling SPX.")
+            st.radio("A call that expires in the money is replaced on", list(_ROLL), key="s_roll", help="The same dollar delta: the expiring call is intrinsic (delta 1), the new ATM call is sized to carry the same exposure — notional = units × index ÷ its delta, about twice the units. The same index units: notional = units × index. Paid from the payoff, then the T-bills, then by selling SPX delta-for-delta.")
+            st.radio("A call that expires worthless is", ["replaced, SPX sold to pay it", "not replaced"], key="s_worthless", help="Replaced: a new ATM call on the same index units, paid from the T-bills then by selling SPX delta-for-delta (the excess over the premium goes to T-bills). Not replaced: the call lapses, nothing is bought, no SPX sold.")
             st.radio("Payoff left after a roll", list(_SURPLUS), key="s_surplus", help="What happens to the part of a payoff not needed for the new call's premium.")
             st.number_input("Lending value of the calls (%)", 0.0, 100.0, step=5.0, key="s_lv_calls")
             st.number_input("Lending value of the T-bills (%)", 0.0, 100.0, step=5.0, key="s_lv_cash", help="The most the bank lends against the T-bills the rotation holds (the payoffs kept in cash). PLACEHOLDER 90 %.")
             st.radio("Start dates", ["every trading day", "every week"], key="s_grid", help="Every trading day takes a few minutes the first time, then it is cached.")
         st.caption("Historical data only, September 1997 to today.")
-    _remember("s_equity", "s_loan", "s_spread", "s_lv", "s_tenor", "s_weeks", "s_wht", "s_worthless", "s_surplus", "s_lv_calls", "s_lv_cash", "s_grid")
+    _remember("s_equity", "s_loan", "s_spread", "s_lv", "s_tenor", "s_weeks", "s_wht", "s_roll", "s_worthless", "s_surplus", "s_lv_calls", "s_lv_cash", "s_grid")
     return setup()
 
 
@@ -104,7 +107,7 @@ def setup() -> Setup:
     """The Setup the sidebar widgets currently show (pages run after the entry script has drawn them)."""
     s = st.session_state
     return Setup(float(s["s_equity"]) * M, float(s["s_loan"]) * M, float(s["s_spread"]) / 1e4, float(s["s_lv"]) / 100.0, float(s["s_lv_calls"]) / 100.0, float(s["s_lv_cash"]) / 100.0,
-                 float(s["s_wht"]) / 100.0, float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"))
+                 float(s["s_wht"]) / 100.0, float(s["s_tenor"]), int(s["s_weeks"]), _SURPLUS[str(s["s_surplus"])], str(s["s_worthless"]).startswith("replaced"), _ROLL[str(s["s_roll"])])
 
 
 @st.cache_data
@@ -171,7 +174,7 @@ def _grid(first: str, last: str, freq: str) -> pd.DatetimeIndex:
 def _engine_kwargs(s: Setup) -> dict[str, object]:
     """The sidebar setup as ``simulate`` keyword arguments."""
     return {"equity0": s.equity, "loan0": s.loan, "spread": s.spread, "ltv_equity": s.lv_equity, "ltv_call": s.lv_calls, "ltv_cash": s.lv_cash, "tenor": s.tenor, "wht": s.wht,
-            "surplus": s.surplus, "cash_buffer": 0.0, "delta": None, "build_tranches": s.build, "replace_worthless": s.replace_worthless}
+            "surplus": s.surplus, "cash_buffer": 0.0, "delta": None, "build_tranches": s.build, "replace_worthless": s.replace_worthless, "roll": s.roll}
 
 
 @st.cache_data(show_spinner=False)

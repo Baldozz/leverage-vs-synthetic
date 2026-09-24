@@ -65,7 +65,6 @@ def test_all_starts_page_weekly_grid() -> None:
         assert stats.iloc[i, 3].endswith(" pp") and abs(float(stats.iloc[i, 3][:-3]) - (pct(stats.iloc[i, 2]) - pct(stats.iloc[i, 1])) * 100) <= 0.11
     ra_ = [pct(c) for c in stats.iloc[1:8, 1]]
     assert ra_ == sorted(ra_) and stats.iloc[8, 3].endswith(" of 1,462 starts")   # 'ahead on' = the same start on both sides; the 51 starts held less than a year are left out of the annualised block
-    worst_rot_all = pct(stats.iloc[1, 2])   # the lowest annualised return of the rotation over every start held at least a year
     import sys
     sys.path.insert(0, str(APP.parents[1] / "src"))
     import pandas as pd
@@ -135,10 +134,11 @@ def test_all_starts_page_weekly_grid() -> None:
     assert gfc.iloc[2, 1] == f"{da['nav_A'] / m:,.0f} m ({da['nav_A'] / m / 750 - 1:+.0%} from the start)" and gfc.iloc[2, 2] == f"{da['nav_B'] / m:,.0f} m ({da['nav_B'] / m / 750 - 1:+.0%} from the start)" and gfc.iloc[2, 3] == pm(da["nav_B"] - da["nav_A"])
     assert gfc.iloc[3, 1] == f"{da['E_A'] / m:,.0f} m" and gfc.iloc[3, 2] == f"{da['E_B'] / m:,.0f} m" and gfc.iloc[3, 3] == pm(da["E_B"] - da["E_A"])
     assert gfc.iloc[4, 1] == "—" and gfc.iloc[4, 2] == f"{da['cash_B'] / m:,.0f} m" and gfc.iloc[4, 3] == pm(da["cash_B"])   # T-bills: the payoffs kept in cash (none here: the 2005 expiries were worthless)
-    # calls bought by that day = the 52 build tranches + the one replacement of March 2006 (the only tranche of the March-2000 start that expired in the money)
-    assert int(da["n_bought"]) == 53 and gfc.iloc[5, 1] == "—" and gfc.iloc[5, 3] == pm(da["call_val"])
-    assert gfc.iloc[5, 2] == f"{da['call_val'] / m:,.0f} m (1 call alive of the 53 bought, on a notional of {da['call_notional'] / m:,.0f} m of index)"
+    # calls bought by that day = the 52 build tranches + their 52 replacements of 2005–06 (51 expired worthless and were replaced on the same units, one in the money on the same dollar delta)
+    assert int(da["n_bought"]) == 104 and int(da["n_calls"]) == 52 and gfc.iloc[5, 1] == "—" and gfc.iloc[5, 3] == pm(da["call_val"])
+    assert gfc.iloc[5, 2] == f"{da['call_val'] / m:,.0f} m (52 calls alive of the 104 bought, on a notional of {da['call_notional'] / m:,.0f} m of index)"
     assert gfc.iloc[6, 1] == f"{da['loan'] / m:,.0f} m" and gfc.iloc[6, 2] == "0 m" and gfc.iloc[6, 3] == pm(-da["loan"])   # the rotation of March 2000 has no loan since 2001
+    assert da["nav_B"] > da["nav_A"] and da["dry_powder_B"] > da["headroom_A"] and 200e6 < da["nav_B"] < 300e6   # ≈ 245 m against 142 m: the 2005 replacements, paid with SPX, kept the convexity
     lv_b = 0.75 * da["E_B"] + 0.0 * da["call_val"] + 0.9 * da["cash_B"]   # the lending value of what the rotation holds: SPX 75 %, calls 0 %, T-bills 90 % (sidebar defaults)
     assert gfc.iloc[7, 1] == f"{0.75 * da['E_A'] / m:,.0f} m (75% of the SPX)" and gfc.iloc[7, 2] == f"{lv_b / m:,.0f} m (75% of the SPX + 0% of the calls + 90% of the T-bills)" and gfc.iloc[7, 3] == pm(lv_b - 0.75 * da["E_A"])
     assert gfc.iloc[8, 1].endswith(f"= {da['headroom_A'] / m:,.0f} m (LTV {da['ltv_A']:.0%}: a further 4% SPX fall to a margin call)") and gfc.iloc[8, 2] == f"{lv_b / m:,.0f} − 0 = {da['dry_powder_B'] / m:,.0f} m"
@@ -147,7 +147,7 @@ def test_all_starts_page_weekly_grid() -> None:
     assert gfc.iloc[9, 1] == f"{da['interest_cum_A'] / m:,.0f} m" and gfc.iloc[9, 2] == f"{da['interest_cum_B'] / m:,.0f} m (during the build)" and gfc.iloc[9, 3] == pm(da["interest_cum_B"] - da["interest_cum_A"])
     assert da["interest_cum_A"] == pytest.approx(pa.loc[:"2009-03-09", "interest_A"].sum())
     assert da["interest_cum_B"] == pytest.approx(pa["interest_B"].sum()) and 5e6 < da["interest_cum_B"] < 15e6   # ≈ 9 m: 250 m at ≈ 7 % repaid over a year
-    assert int(da["n_calls"]) == 1 and da["loan_B"] == 0.0
+    assert int(da["n_calls"]) == 52 and da["loan_B"] == 0.0
     # the picks and the count over every weekly start running on 9 Mar 2009 (the page's grid): recompute all from the engine on the same starts
     bottom = pd.Timestamp("2009-03-09")
     # run past the bottom: `rolling_paths` skips a start whose build is not complete 30 days before the end date, and the page runs every start to today
@@ -193,17 +193,23 @@ def test_all_starts_page_weekly_grid() -> None:
     assert list(at.dataframe[0].value["Correction"]) == ["2007–2009"] and "At the 2007–2009 bottom" in " ".join(h.value for h in at.subheader)
     assert at.table[1].value.iloc[8, 1].startswith("381 − 366 = 15 m (LTV 96%")   # the worst levered trajectory at the bottom, same as when held to today
     assert any("lost **all** its calls" in m.value for m in at.markdown) and any("Margin calls keeping the loan: **0** of the" in m.value for m in at.markdown)
-    # exclude the rotations that stopped buying calls: fewer starts everywhere below the fans, the worst trajectory no longer has a worthless expiry
+    # under the default rules nothing lapses: no orange line
     at.selectbox(key="r_end").set_value(at.selectbox(key="r_end").options[0]).run()
     at.button(key="r_launch").click().run()
-    at.checkbox(key="r_excl").set_value(True).run()   # the exclusion is a live filter: no launch needed
+    assert any("0 of the 1,513 starts had at least one call expire worthless" in c.value for c in at.caption)
+    assert at.radio(key="s_roll").value == "the same dollar delta" and at.radio(key="s_worthless").value == "replaced, SPX sold to pay it"   # the sidebar defaults
+    at.radio(key="s_roll").set_value("the same index units").run()
+    assert not at.button(key="r_launch").proto.disabled   # a rule change is a new run
+    at.radio(key="s_roll").set_value("the same dollar delta").run()
+    assert at.button(key="r_launch").proto.disabled
+    # the lapse rule: switch the sidebar to "not replaced" and relaunch — the rotations that let a call lapse are back (orange lines and profile), the 1997–2001 starts lose every call
+    at.radio(key="s_worthless").set_value("not replaced").run()
+    at.button(key="r_launch").click().run()
     assert not at.exception, [e.value for e in at.exception]
-    n_kept = int(at.table[0].value.iloc[8, 3].split(" of ")[1].split(" starts")[0].replace(",", ""))   # the annualised block: starts held at least a year, lapsed rotations out
-    n_sel = int(next(h.value for h in at.subheader if "selected starts" in h.value).split(": the ")[1].split(" selected")[0].replace(",", ""))   # every selected start
-    assert 800 < n_kept < 1462 and n_kept < n_sel < 1513 and any("stopped buying calls excluded" in h.value for h in at.subheader) and any("are excluded (both portfolios)" in m.value for m in at.markdown)
-    assert any(f"{n_sel:,} lines" in c.value and "0 of the" in c.value for c in at.caption)   # the fans drop the same starts in both portfolios: no orange line left
-    assert pct(at.table[0].value.iloc[1, 2]) >= worst_rot_all   # dropping the lapsed rotations cannot lower the rotation's worst annualised return (the Sep-2000 start, +6.7 %, is among them)
-    assert any(f"; {n:,} starts running that day" in m.value for m in at.markdown for n in range(1, 600))   # the 2009 tab counts fewer starts too
+    lapse_line = next(c.value for c in at.caption if "had at least one call expire worthless and not replaced" in c.value)
+    n_lapsed = int(lapse_line.split(" of the 1,513 starts had")[0].split(": ")[-1].replace(",", ""))
+    assert 300 < n_lapsed < 800 and not any(h.value.endswith("excluded") for h in at.subheader) and len(at.checkbox) == 0   # no exclusion checkbox any more
+    assert any("1,513 selected starts" in h.value for h in at.subheader) and any(m.value.startswith("- Of the 1,513 selected starts, the rotated portfolio lost **all** its calls on **") and "on **0%**" not in m.value for m in at.markdown)
     # the Launch simulation button and the sidebar: greyed out while the sidebar equals the launched setup; a changed widget enables it but the page keeps the launched setup until it is pressed
     launch = lambda: at.button(key="r_launch")  # noqa: E731
     assert launch().proto.disabled and not any("The parameters have changed" in c.value for c in at.caption)

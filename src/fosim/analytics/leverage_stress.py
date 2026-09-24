@@ -11,9 +11,12 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
                   that day, ≈ 45–55 %), premium c_w · N_w, and the cash x_w − c_w · N_w repays an equal share of the loan
                   then outstanding  ⇒  x_w = (L_w / remaining steps) / (1 − c_w/δ_w); the loan is gone after the last step
                   E_B(t) = (E₀ − x) · TR(t)/TR(t₀);  calls marked daily (BSM, q = r, remaining tenor);
-                  at expiry the payoff is cashed; a call that ends in the money is replaced by a new ATM call on the same
-                  index units, paid from the payoff, then cash, then by selling equity (payoff left over: T-bills, equity
-                  or more calls); a call that expires worthless lapses (nothing to reinvest) unless ``replace_worthless``
+                  at expiry the payoff is cashed; a call that ends in the money is replaced by a new ATM call carrying the same
+                  dollar delta (``roll="delta"``, default: notional units · S_T / δ_new, the intrinsic exposure units · S_T carried on)
+                  or on the same index units (``roll="units"``), paid from the payoff, then cash, then by selling equity
+                  delta-for-delta (the share of the tranche the SPX pays for gives up δ · its notional of SPX, the excess over the
+                  premium goes to T-bills); the payoff left over: T-bills, equity or more calls. A call that expires worthless is
+                  replaced on the same index units (``replace_worthless=True``, default) or lapses
                   dry powder_B = capacity_B − loan_B (an optional cash buffer can be kept at t₀)
                   capacity_B = ℓ_E · E_B + ℓ_C · call value + ℓ_T · cash   (the lending value of what is held; the cash is in T-bills)
 
@@ -37,6 +40,7 @@ from fosim.pricing.black_scholes import bsm_greeks, bsm_price
 
 REQUIRED = ("date", "spxfp", "spx_px_last", "spx_div_yld", "loan_base", "tbill_3m", "ust_5y", "iv_5y")
 SURPLUS_POLICIES = ("cash", "equity", "calls")
+ROLL_RULES = ("delta", "units")   # what an in-the-money call is replaced on: the same dollar delta, or the same index units
 TOL = 1e-6
 
 
@@ -51,6 +55,7 @@ class Roll:
     payoff: float
     premium_paid: float
     equity_sold: float
+    cut: bool = False        # the replacement was cut to what the payoff, the T-bills and all the SPX could fund
 
 
 @dataclass(frozen=True)
@@ -104,15 +109,20 @@ def _nearest_index(dates: np.ndarray, target: np.datetime64) -> int:
 def simulate(
     start: str | pd.Timestamp, end: str | pd.Timestamp, equity0: float = 1000e6, loan0: float = 250e6, spread: float = 0.0075,
     ltv_equity: float = 0.75, ltv_call: float = 0.0, ltv_cash: float = 0.90, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
-    surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = False,
-    file: Path | str | None = None,
+    surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = True,
+    roll: str = "delta", file: Path | str | None = None,
 ) -> tuple[pd.DataFrame, StressInfo]:
     """Daily path of both setups from ``start`` to ``end`` (nearest trading days). See the module docstring.
 
     ``surplus``: what B does with payoff cash left after paying the roll premium — ``"cash"`` (T-bills), ``"equity"`` (buy SPX)
     or ``"calls"`` (buy more ATM calls at the same premium fraction, so the whole payoff stays exposed to the index).
-    ``replace_worthless``: a call that expires worthless is not replaced (default: nothing to reinvest, no SPX sold); ``True`` buys
-    the new ATM call anyway, paid from cash then by selling SPX. A call that expires in the money is always replaced.
+    ``roll``: what a call that expires in the money is replaced on — ``"delta"`` (default): a new ATM call with the same dollar delta as
+    the expiring one (intrinsic, delta 1): notional = units × S_T ÷ δ_new; ``"units"``: the same index units, notional = units × S_T.
+    ``replace_worthless``: a call that expires worthless is replaced on the same index units (``True``, default; its expired exposure
+    is nil, so a delta target would size it at zero), paid from cash then by selling SPX; ``False`` lets it lapse (nothing bought, no SPX sold).
+    SPX sold to fund a replacement is sold delta-for-delta: the share of the tranche the SPX pays for gives up δ × its notional of SPX,
+    the premium is paid out of it and the excess goes to T-bills, so the sale does not change the exposure. When even all the SPX
+    cannot fund the tranche it is cut to what can be funded, N = cash/c + SPX/δ (every unit of SPX sold), and the roll is flagged ``cut``.
     ``cash_buffer``: extra equity rotated at t₀ so that B keeps this much cash after repaying the loan (0 = fully invested).
     ``delta``: the call delta used to size the sleeve (notional = equity sold / delta). ``None`` (default) uses the model delta of
     the ATM call at t₀, ∂C/∂S of BSM with q = r — implicit in the option being at the money; a number overrides it (scripted use).
@@ -129,6 +139,8 @@ def simulate(
         raise ValueError("build_tranches must be ≥ 1")
     if surplus not in SURPLUS_POLICIES:
         raise ValueError(f"surplus must be one of {SURPLUS_POLICIES}")
+    if roll not in ROLL_RULES:
+        raise ValueError(f"roll must be one of {ROLL_RULES}")
     full = _load(str(file or DAILY_FILE))
     rate_col, vol_col = tenor_columns(full, tenor)
     d = full.dropna(subset=[c for c in REQUIRED if c != "date"] + [rate_col, vol_col]).reset_index(drop=True)
@@ -257,7 +269,7 @@ def simulate(
         payoff_today = 0.0
         if k in build_days:
             new_premium += build_step(k, n_tr - build_days.index(k))
-        for t in live.pop(k, []):            # tranches expiring today: cash-settle, roll into a new ATM call on the same units
+        for t in live.pop(k, []):            # tranches expiring today: cash-settle, roll into a new ATM call (same dollar delta, or same units)
             payoff = t.units * max(S[k] - t.strike, 0.0)
             payoff_today += payoff
             cash += payoff
@@ -267,27 +279,33 @@ def simulate(
                 is_roll[k] = True
             elif k < n - 1:
                 c_k, d_k = atm(k)
-                notional = t.units * S[k]            # same index units: the new ATM notional is units × today's index
+                # the replacement: under the delta rule an in-the-money call (intrinsic, delta 1: exposure units × S_T) is replaced by the notional
+                # carrying the same dollar delta, units × S_T / δ; a worthless call, or the units rule, is replaced on the same index units
+                notional = t.units * S[k] / d_k if (roll == "delta" and payoff > 0.0) else t.units * S[k]
+                n_max = cash / c_k + eq_units * tr[k] / d_k   # what the T-bills (and the payoff) plus every unit of SPX sold delta-for-delta can fund
+                cut = notional > n_max + TOL
+                if cut:
+                    notional = n_max
                 premium = c_k * notional
-                cash -= premium
                 sold = 0.0
-                if cash < 0.0:                   # the payoff did not cover the new premium: sell equity for the shortfall
-                    sold = -cash
-                    if sold > eq_units * tr[k] + TOL:
-                        raise ValueError(f"roll on {pd.Timestamp(dates[k]).date()}: premium {premium / 1e6:,.1f} m exceeds payoff, cash and equity")
+                if cash >= premium:                  # the payoff and the T-bills pay the premium; what is left follows the surplus policy
+                    cash -= premium
+                    if surplus == "equity" and cash > 0.0:
+                        eq_units += cash / tr[k]
+                        cash = 0.0
+                    elif surplus == "calls" and cash > 0.0:   # the payoff left buys more ATM calls at the same premium fraction
+                        notional += cash / c_k
+                        premium += cash
+                        cash = 0.0
+                else:                                # the shortfall is funded by selling SPX delta-for-delta: the share of the tranche the SPX pays for
+                    short = premium - cash           # gives up δ × its notional of SPX (the exposure those calls bring); the excess over the premium goes to T-bills
+                    sold = min(short / premium * d_k * notional, eq_units * tr[k])   # (equal to all the SPX when the tranche was cut)
                     eq_units -= sold / tr[k]
-                    cash = 0.0
-                if surplus == "equity" and cash > 0.0:
-                    eq_units += cash / tr[k]
-                    cash = 0.0
-                elif surplus == "calls" and cash > 0.0:   # the payoff left buys more ATM calls at the same premium fraction
-                    notional += cash / c_k
-                    premium += cash
-                    cash = 0.0
+                    cash = sold - short
                 nt = buy(k, notional, c_k, d_k)
                 delta_notional += d_k * nt.units * nt.strike
                 new_premium += premium
-                rolls.append(Roll(pd.Timestamp(dates[k]), c_k, payoff, premium, sold))
+                rolls.append(Roll(pd.Timestamp(dates[k]), c_k, payoff, premium, sold, cut))
                 is_roll[k] = True
         prem_day[k], pay_day[k] = new_premium, payoff_today
         call_val[k] = marks[k] + new_premium
@@ -371,6 +389,7 @@ def _start_row(p: pd.DataFrame, info: StressInfo) -> dict[str, object]:
         "B: min borrowing capacity": float((p["cap_B"] - p["loan_B"]).min()), "years": float((p.index[-1] - p.index[0]).days / 365.25),
         "NAV A end": float(p["nav_A"].iloc[-1]), "NAV B end": float(p["nav_B"].iloc[-1]), "end": info.end, "rolls": len(info.rolls),
         "B: lapsed": sum(1 for r in info.rolls if r.payoff == 0.0 and r.premium_paid == 0.0), "B: calls lost on": lost[0] if len(lost) else pd.NaT,
+        "B: cut rolls": sum(1 for r in info.rolls if r.cut),
         "B: call notional end": float(p["call_notional"].iloc[-1]), "build end": info.build_end,
         "A return": float(p["nav_A"].iloc[-1] / p["nav_A"].iloc[0] - 1.0), "B return": float(p["nav_B"].iloc[-1] / p["nav_B"].iloc[0] - 1.0),
         "B: max LTV": float((p["loan_B"] / p["cap_B"]).max()),
@@ -468,7 +487,7 @@ def starts_table(rs: pd.DataFrame) -> pd.DataFrame:
         "rotate into calls: premiums paid (m)": (rs["premiums paid"] / m).round(1),
         "keep the loan: dividends received (m)": (rs["dividends A"] / m).round(1), "rotate into calls: dividends received (m)": (rs["dividends B"] / m).round(1),
         "rotate into calls: payoffs received (m)": (rs["payoffs received"] / m).round(1), "rotate into calls: SPX sold at rolls (m)": (rs["equity sold at rolls"] / m).round(1),
-        "calls expired": rs["rolls"], "calls expired worthless": rs["B: lapsed"], "all calls gone on": [d.isoformat() if pd.notna(d) else "" for d in pd.DatetimeIndex(rs["B: calls lost on"]).date],
+        "calls expired": rs["rolls"], "calls expired worthless": rs["B: lapsed"], "replacements cut for lack of SPX": rs["B: cut rolls"], "all calls gone on": [d.isoformat() if pd.notna(d) else "" for d in pd.DatetimeIndex(rs["B: calls lost on"]).date],
         "keep the loan today: SPX (m)": (rs["end: equity A"] / m).round(1), "keep the loan today: loan (m)": (rs["end: loan A"] / m).round(1),
         "rotate into calls today: SPX (m)": (rs["end: equity B"] / m).round(1), "rotate into calls today: calls (m)": (rs["end: calls B"] / m).round(1),
         "rotate into calls today: call notional (m)": (rs["B: call notional end"] / m).round(1), "rotate into calls today: cash (m)": (rs["end: cash B"] / m).round(1),

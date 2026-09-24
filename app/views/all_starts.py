@@ -46,12 +46,10 @@ def window(s_: Setup, grid_: str, end_label_: str) -> tuple[str, pd.Timestamp, p
 # ---------------- the controls: the run is defined by the sidebar, the grid, the start year and the end day, and runs only when the button is pressed
 st.title("Historical simulation")
 s_now, grid_now = setup(), str(st.session_state["s_grid"])
-c_years, c_end, c_x, c_go = st.columns([2, 2, 1.6, 1.2])   # start years, the final day, the exclusion of the rotations that stopped buying calls, the launch
+c_years, c_end, c_go = st.columns([2, 2, 1.2])   # start years, the final day, the launch
 end_label_now = c_end.selectbox("Held until", list(ends), key="r_end", help="Every start runs to this day: today, or the bottom of a market correction to see how the portfolios looked at the worst moment.")
 _, _, _, _, _, years_now = window(s_now, grid_now, end_label_now)
 picked_now = int(c_years.selectbox("Starts from", years_now, key="r_years", help="Every start from 1 January of that year to the last start; the first year = every start."))
-excl = c_x.checkbox("Exclude the rotations that stopped buying calls", key="r_excl", help="Drops from every table below the starts whose rotation let at least one call lapse "
-                    "(both portfolios of that start). A selection on the outcome: it removes the rotation's bad cases, not the loan's.")
 current = (s_now, grid_now, picked_now, end_label_now)
 launched = st.session_state.get("launched")
 c_go.markdown("<div style='height: 1.75rem'></div>", unsafe_allow_html=True)   # the button level with the widgets
@@ -95,8 +93,6 @@ st.download_button("Download every start date as CSV", lvs.starts_table(rs).to_c
 # ---------------- every start date's path, Monte Carlo style, with the distribution of the final NAV on the right
 st.subheader(f"Every start date's path to {'today' if not at_bottom else end_label.split(' (')[0]}")
 sel_all = rs.index[[d.year in sel_years for d in rs.index]]   # every selected start: the profiles and every table below use all of them
-if excl:   # the rotations that stopped buying calls leave every chart and table, in both portfolios (same start dates)
-    sel_all = sel_all[~some_lapsed.loc[sel_all].to_numpy()]
 step = 5 if freq == "D" else 1   # with daily starts draw every fifth line (≈ weekly): 4,500 lines would be slow and unreadable
 cols = sel_all[::step]
 LIGHT_ORANGE = "#f0b46e"
@@ -242,7 +238,7 @@ st.plotly_chart(fig, width="stretch")
 st.caption(f"Top: the NAV on {end_day:%d %b %Y} of the two portfolios put on at each start date (x axis), one point per selected start, both leaving from {(s.equity - s.loan) / M:,.0f} m on that day. "
            "Earlier starts have been held longer, so the level falls along the axis; read the two lines against each other. Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation "
            "ends ahead and red where it ends behind. Dotted lines: the market peaks (a start there is bought at the top); dashed lines: the bottoms (a start there is bought at the low). "
-           "Gaps: starts outside the selected years or excluded by the checkboxes. The zoom slider above sets the window of start dates; the two labels mark the lowest NAV of each portfolio inside it, "
+           "Gaps: starts outside the selected years. The zoom slider above sets the window of start dates; the two labels mark the lowest NAV of each portfolio inside it, "
            "with the other portfolio's NAV on that same start. The table below gives the distribution of the same values as annualised returns.")
 
 # ---------------- dry powder on the end day by start date: Keep's room before a margin call and its LTV, Rotate's dry powder, the net on the same start
@@ -332,17 +328,14 @@ def show(rows: list[list[str]]) -> pd.DataFrame:
 
 sel_year = sel_all[(rs.loc[sel_all, "years"] >= 1.0).to_numpy()]   # annualising a few weeks of noise is meaningless: the annualised figures use the starts held at least a year
 n_young = len(sel_all) - len(sel_year)
-st.subheader(f"On {end_day:%d %b %Y}: the {len(sel_all):,} selected starts" + (" — rotations that stopped buying calls excluded" if excl else ""))
+st.subheader(f"On {end_day:%d %b %Y}: the {len(sel_all):,} selected starts")
 ann_sel = ann.loc[sel_year]
 show(block("Annualised return to the end day" + (f" ({len(sel_year):,} starts held at least a year)" if n_young else ""), ann_sel[A], ann_sel[B], cell=lambda x: f"{x:+.1%}", delta=lambda d: f"{d * 100:+.1f} pp"))
 ratio = (fin[B] / fin[A] - 1.0).loc[sel_year]
-n_excl = int(some_lapsed.loc[rs.index[[d.year in sel_years for d in rs.index]]].sum())
-note = (f"- The {n_excl:,} starts whose rotation let a call lapse are excluded (both portfolios): a selection on the outcome, which removes the rotation's bad cases but none of the loan's.\n"
-        if excl else "")
 young_note = f"; the {n_young:,} starts held less than a year are left out of this block (a few weeks of noise annualised would swamp the lowest and highest rows). " if n_young else ". "
 st.markdown(f"- Annualised return = (NAV on the end day ÷ {nav0:,.0f} m)^(1 / years held) − 1, comparable across starts whatever their holding period{young_note}"
             f"Keep and Rotate: each portfolio's own distribution over the starts; Δ = Rotate − Keep on each row (lowest vs lowest, median vs median — usually different start dates); "
-            f"'rotation ahead on' compares each start with itself.\n{note}"
+            f"'rotation ahead on' compares each start with itself.\n"
             f"- Same start, same end: the rotation ends **ahead on {float((ratio > 0).mean()):.0%}** of these starts; its final NAV relative to keeping the loan: median **{ratio.median():+.1%}**, "
             f"5th–95th percentile {ratio.quantile(0.05):+.1%} to {ratio.quantile(0.95):+.1%}, worst {ratio.min():+.1%} ({ratio.idxmin():%d %b %Y} start), best {ratio.max():+.1%} ({ratio.idxmax():%d %b %Y} start).\n"
             f"- Consecutive starts overlap almost entirely: the percentiles are the range of history, not probabilities.")
@@ -435,8 +428,7 @@ st.markdown(f"- Margin calls keeping the loan: **{int(rs.loc[sel_all, 'A: margin
 
 # ---------------- reading
 st.markdown(f"- Of the {len(sel_all):,} selected starts, the rotated portfolio lost **all** its calls on **{lost_all.loc[sel_all].mean():.0%}** ({int(lost_all.loc[sel_all].sum()):,}) and **some** of them on "
-            f"{some_lapsed.loc[sel_all].mean():.0%}; on the other {1 - some_lapsed.loc[sel_all].mean():.0%} every call expired in the money and was replaced"
-            + (" (the rotations that let a call lapse are excluded by the checkbox above).\n" if excl else ".\n")
+            f"{some_lapsed.loc[sel_all].mean():.0%}; on the other {1 - some_lapsed.loc[sel_all].mean():.0%} every call expired in the money and was replaced.\n"
             + f"- Annualised over each start's own holding period, the median return to {end_day:%d %b %Y} over the selected starts is {ann_sel[A].median():+.1%} ({A}) vs {ann_sel[B].median():+.1%} ({B}).")
 st.caption("Consecutive start dates overlap almost entirely, so the charts show the range of historical outcomes, not independent draws. Calls are priced and marked with Black–Scholes on SPXFP (q = r) at the implied vol of the day, "
            "extrapolated from the 24-month Bloomberg series; the delta is the model delta of the ATM call. No bid/ask, no early unwind. Dividends reinvested net of withholding; cash earns the 3-month T-bill.")

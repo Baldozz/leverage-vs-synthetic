@@ -44,7 +44,8 @@ def main() -> None:
     ap.add_argument("--weeks", type=int, default=52, help="weekly steps of the rotation (1 = one shot)")
     ap.add_argument("--wht", type=float, default=15.0, help="dividend withholding tax, %%")
     ap.add_argument("--surplus", choices=["cash", "equity", "calls"], default="cash")
-    ap.add_argument("--replace-worthless", action="store_true", help="replace a call that expires worthless (default: it lapses)")
+    ap.add_argument("--roll", choices=["delta", "units"], default="delta", help="an in-the-money call is replaced on the same dollar delta or the same index units")
+    ap.add_argument("--worthless", choices=["replace", "lapse"], default="replace", help="a call that expires worthless is replaced on the same units, or lapses")
     ap.add_argument("--out", default=None, help="output CSV (default reports/trajectories_<grid>_<sample>.csv)")
     a = ap.parse_args()
 
@@ -61,7 +62,7 @@ def main() -> None:
     print(f"{len(starts):,} start dates {starts[0].date()} → {starts[-1].date()}, held to {last.date()}, sampled every {a.sample} …", flush=True)
     _rows, paths = rolling_paths(starts, last, columns=PATH_COLUMNS, sample=a.sample, progress=lambda i, n: print(f"  {i:,}/{n:,}", end="\r", flush=True),
                                 equity0=a.equity * 1e6, loan0=a.loan * 1e6, spread=a.spread / 1e4, ltv_equity=a.lv / 100, ltv_call=a.lv_calls / 100, ltv_cash=a.lv_cash / 100, tenor=a.tenor, wht=a.wht / 100,
-                                surplus=a.surplus, build_tranches=a.weeks, replace_worthless=a.replace_worthless)
+                                surplus=a.surplus, build_tranches=a.weeks, replace_worthless=a.worthless == "replace", roll=a.roll)
     tbl = paths_table(paths)
     tbl.to_csv(out, index=False)
     print(f"\n{len(tbl):,} rows × {len(tbl.columns)} columns, {out.stat().st_size / 1e6:.0f} MB, {time.perf_counter() - t:.0f}s → {out}")

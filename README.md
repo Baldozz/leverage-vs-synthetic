@@ -4,13 +4,16 @@
 capitalised). Option 1, **Keep the loan**: nothing changes. Option 2, **Rotate into calls**: week by week sell SPX,
 buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so the SPX-equivalent exposure stays
 1 bn, and repay the loan with the proceeds net of premium; the loan is gone after 52 weeks. A call that expires in
-the money is replaced by a new ATM call on the same index units (paid from the payoff, then cash, then SPX); a call
-that expires worthless lapses. Historical data only, September 1997 to today.
+the money is replaced by a new ATM call carrying the same dollar delta (notional = units × index ÷ delta, about twice the
+units; or on the same index units, sidebar); a call that expires worthless is replaced on the same index units (or lapses,
+sidebar). Replacements are paid from the payoff, then the T-bills, then by selling SPX delta-for-delta (the excess over the
+premium goes to T-bills); a replacement that not even all the SPX can fund is cut to what can be, and counted. Historical
+data only, September 1997 to today.
 
 **The app** — `app/historical_app.py`, two pages, each with its own sidebar (the call tenor and the dividend withholding tax are
 common to both). Page 1's sidebar is the setup above, every number editable; the page runs only when its **Launch simulation** button is
-pressed (sidebar, grid, start year and end day), and the button is greyed out until something changes (Advanced: withholding tax, what happens to a call that
-expires worthless, what a payoff left after a roll buys, the lending values of the calls and of the T-bills, the start-date grid); page 2's sidebar
+pressed (sidebar, grid, start year and end day), and the button is greyed out until something changes (Advanced: withholding tax, what an in-the-money call is replaced on, whether a
+worthless call is replaced, what a payoff left after a roll buys, the lending values of the calls and of the T-bills, the start-date grid); page 2's sidebar
 holds the backtest's inputs (premium, premium mode, strike window, cash leg):
 1. **Historical simulation** (`app/views/all_starts.py`): both portfolios put on at every trading day (or week) from
    9 Sep 1997 to a week before the end day, each held to the day chosen in *Held until* — today, or one of the market bottoms (Oct 2002, Mar 2009,
@@ -20,8 +23,7 @@ holds the backtest's inputs (premium, premium mode, strike window, cash leg):
    the distribution of the final NAV drawn vertically on the right edge, with a zoom slider; the NAV on the end day by start date — Keep, Rotate and the net Rotate − Keep on the
    same start, one point per start with the market peaks and bottoms marked and each portfolio's lowest point labelled with the other's value on that start, and the same
    chart for dry powder (Keep's room before a margin call with its LTV as yellow-to-orange dots on a right axis, Rotate's dry powder, the net); on the end day, the distribution of the annualised return over the selected starts
-   (lowest, percentiles, highest; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead on the same start; a checkbox excludes the
-   rotations that stopped buying calls from every table); the corrections of 20 % or more in the SPX
+   (lowest, percentiles, highest; Δ = Rotate − Keep on each row, plus the count of starts on which the rotation is ahead on the same start); the corrections of 20 % or more in the SPX
    price index (peak, bottom, recovery, the lowest NAV of each portfolio on the bottom day); one tab per market bottom (sections Worst trajectory and Dry powder, shaded section rows; text tables that wrap), Keep the loan vs Rotate into calls with the delta —
    the worst trajectory in detail — the start with the lowest NAV that day in either portfolio, both strategies read on that same start with a Δ on every row (when it
    started and how far from the peak, NAV, SPX, T-bills, calls at market value with the number alive, loan, lending value — 75 % of the

@@ -80,7 +80,7 @@ def test_roll_cash_flows_rising_and_falling(tmp_path: Path) -> None:
     n = 6 * 262
     up = 1000.0 * np.exp(0.08 * np.arange(n) / 262)
     f = _file(tmp_path, up, base=0.0, tbill=0.0, rate=0.0, iv=20.0)
-    p, info = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=f)
+    p, info = simulate("2010-01-04", "2015-12-31", build_tranches=1, roll="units", file=f)   # the units rule
     assert len(info.rolls) == 1
     r = info.rolls[0]
     k = p.index.get_loc(r.date)
@@ -92,16 +92,37 @@ def test_roll_cash_flows_rising_and_falling(tmp_path: Path) -> None:
     assert p["call_notional"].iloc[k] == pytest.approx(info.units0 * ST)
     down = 1000.0 * np.exp(-0.05 * np.arange(n) / 262)
     fd = _file(tmp_path, down, base=0.0, tbill=0.0, rate=0.0, name="down.csv")
-    p2, info2 = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=fd)   # default: a worthless call lapses, nothing bought, no SPX sold
+    p2, info2 = simulate("2010-01-04", "2015-12-31", build_tranches=1, replace_worthless=False, file=fd)   # option: a worthless call lapses, nothing bought, no SPX sold
     r2 = info2.rolls[0]
     k2 = p2.index.get_loc(r2.date)
     assert r2.payoff == 0.0 and r2.premium_paid == 0.0 and r2.equity_sold == 0.0 and p2["cash_B"].iloc[k2] == 0.0
     assert (p2["n_calls"].iloc[:k2] == 1).all() and (p2["n_calls"].iloc[k2:] == 0).all() and (p["n_calls"] == 1).all()   # lapsed: no call from the expiry day; rolled: one call throughout
     assert (p2["call_notional"].iloc[k2:] == 0.0).all() and (p2["call_val"].iloc[k2:] == 0.0).all() and p2["E_B"].iloc[k2] == pytest.approx(p2["E_B"].iloc[k2 - 1] * down[k2] / down[k2 - 1])
     assert np.allclose(p2["exposure_B"].iloc[k2:], p2["E_B"].iloc[k2:])   # only the SPX held is exposed after the lapse
-    p3, info3 = simulate("2010-01-04", "2015-12-31", build_tranches=1, replace_worthless=True, file=fd)   # option: replace it anyway, SPX sold to pay
+    p3, info3 = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=fd)   # default: replaced on the same index units, paid by selling SPX delta-for-delta
     r3 = info3.rolls[0]
-    assert r3.payoff == 0.0 and r3.premium_paid > 0 and r3.equity_sold == pytest.approx(r3.premium_paid) and p3["cash_B"].iloc[k2] == 0.0 and p3["call_notional"].iloc[k2] > 0
+    dm = float(np.asarray(bsm_greeks(100.0, 100.0, 0.0, 0.0, 0.20, 5.0).delta))   # zero rates, 20 % vol: the ATM delta on every day of the synthetic file
+    n3 = info3.units0 * down[k2]
+    assert r3.payoff == 0.0 and r3.premium_paid == pytest.approx(r3.premium_frac * n3) and p3["call_notional"].iloc[k2] == pytest.approx(n3)
+    assert r3.equity_sold == pytest.approx(dm * n3) and p3["cash_B"].iloc[k2] == pytest.approx((dm - r3.premium_frac) * n3)   # SPX sold for the calls' delta, the excess to T-bills
+    assert p3["E_B"].iloc[k2] == pytest.approx(p2["E_B"].iloc[k2] - dm * n3) and p3["nav_B"].iloc[k2] == pytest.approx(p2["nav_B"].iloc[k2])   # NAV-neutral: stock swapped for calls + T-bills
+    # the delta rule (default) on the rising path: the in-the-money call (intrinsic, delta 1) is replaced by units × S_T / δ of ATM notional, the same dollar delta
+    pdl, idl = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=f)
+    rd = idl.rolls[0]
+    nd = idl.units0 * ST / dm
+    assert rd.payoff == pytest.approx(r.payoff) and pdl["call_notional"].iloc[k] == pytest.approx(nd) and rd.premium_paid == pytest.approx(rd.premium_frac * nd)
+    assert rd.equity_sold == 0.0 and pdl["cash_B"].iloc[k] == pytest.approx(rd.payoff - rd.premium_paid) and rd.payoff > rd.premium_paid   # +8 %/yr for 6 years: the payoff covers the doubled premium
+    assert pdl["exposure_B"].iloc[k] == pytest.approx(pdl["E_B"].iloc[k] + idl.units0 * ST) and pdl["nav_B"].iloc[k] == pytest.approx(p["nav_B"].iloc[k])   # exposure carried on; NAV-neutral
+    # a smaller rise: the payoff does not cover the premium, the shortfall is funded by selling SPX delta-for-delta on the share the SPX pays for
+    up2 = 1000.0 * np.exp(0.02 * np.arange(n) / 262)
+    f2 = _file(tmp_path, up2, base=0.0, tbill=0.0, rate=0.0, iv=20.0, name="up2.csv")
+    ps, i_s = simulate("2010-01-04", "2015-12-31", build_tranches=1, file=f2)
+    rsh = i_s.rolls[0]
+    ks = ps.index.get_loc(rsh.date)
+    ns = i_s.units0 * ps["spxfp"].iloc[ks] / dm
+    short = rsh.premium_paid - rsh.payoff
+    assert short > 0 and rsh.premium_paid == pytest.approx(rsh.premium_frac * ns) and rsh.equity_sold == pytest.approx(short / rsh.premium_paid * dm * ns)
+    assert ps["cash_B"].iloc[ks] == pytest.approx(rsh.equity_sold - short) and ps["E_B"].iloc[ks] == pytest.approx(ps["E_B"].iloc[ks - 1] * up2[ks] / up2[ks - 1] - rsh.equity_sold)
     p4, _ = simulate("2010-01-04", "2015-12-31", surplus="equity", build_tranches=1, file=f)
     assert p4["cash_B"].iloc[k] == 0.0 and p4["E_B"].iloc[k] > p["E_B"].iloc[k]
     p5, info5 = simulate("2010-01-04", "2015-12-31", surplus="calls", build_tranches=1, file=f)
@@ -155,16 +176,16 @@ def test_rolling_start_row_equals_single_path(tmp_path: Path) -> None:
     seen: list[tuple[int, int]] = []
     rolling_starts(starts, 5.0, build_tranches=1, file=f, progress=lambda i, n: seen.append((i, n)))
     assert seen and seen[-1] == (3, 3)
-    rs2 = rolling_starts(starts, 5.0, build_tranches=1, file=f, until="2017-12-29")   # every start runs to the same end date
+    rs2 = rolling_starts(starts, 5.0, build_tranches=1, replace_worthless=False, file=f, until="2017-12-29")   # every start runs to the same end date; the lapse rule, to count lapses
     assert len(rs2) == 3 and (rs2["end"] == rs2["end"].iloc[0]).all() and rs2["rolls"].tolist() == [1, 1, 0]
     assert (rs2["build end"] == rs2.index).all()
-    pu, iu = simulate("2010-06-01", "2017-12-29", build_tranches=1, file=f)   # the first row against its own single path (its one call expired worthless on this random path)
+    pu, iu = simulate("2010-06-01", "2017-12-29", build_tranches=1, replace_worthless=False, file=f)   # the first row against its own single path (its one call expired worthless on this random path)
     lapsed = [r for r in iu.rolls if r.payoff == 0.0 and r.premium_paid == 0.0]
     assert rs2["B: lapsed"].iloc[0] == len(lapsed) == 1 and rs2["B: calls lost on"].iloc[0] == lapsed[0].date and rs2["B: call notional end"].iloc[0] == 0.0 == pu["call_notional"].iloc[-1]
     assert rs2["B: lapsed"].iloc[2] == 0 and pd.isna(rs2["B: calls lost on"].iloc[2]) and rs2["B: call notional end"].iloc[2] > 0   # the 2016 start: no expiry before the end, calls still held
     fd = _file(tmp_path, 1000.0 * np.exp(-0.03 * np.arange(n) / 262), name="down.csv")   # falling path: the one call lapses → the option part is lost at its expiry
-    rs3 = rolling_starts(starts[:1], 5.0, build_tranches=1, file=fd, until="2017-12-29")
-    pd_, i_ = simulate("2010-06-01", "2017-12-29", build_tranches=1, file=fd)
+    rs3 = rolling_starts(starts[:1], 5.0, build_tranches=1, replace_worthless=False, file=fd, until="2017-12-29")
+    pd_, i_ = simulate("2010-06-01", "2017-12-29", build_tranches=1, replace_worthless=False, file=fd)
     assert rs3["B: lapsed"].iloc[0] == 1 and rs3["B: calls lost on"].iloc[0] == i_.rolls[0].date and rs3["B: call notional end"].iloc[0] == 0.0 and (pd_["call_notional"].loc[i_.rolls[0].date:] == 0).all()
     assert rs2["B: min dry powder"].iloc[0] <= rs2["B: dry powder at trough"].iloc[0]
 
@@ -207,7 +228,7 @@ def test_rolling_paths_match_the_single_paths(tmp_path: Path) -> None:
 
 def test_input_validation(tmp_path: Path) -> None:
     f = _file(tmp_path, np.full(50, 1000.0))
-    for kw in ({"equity0": 0.0}, {"ltv_equity": 1.5}, {"ltv_cash": 1.5}, {"surplus": "gold"}, {"tenor": 0.0}, {"build_tranches": 0}):
+    for kw in ({"equity0": 0.0}, {"ltv_equity": 1.5}, {"ltv_cash": 1.5}, {"surplus": "gold"}, {"roll": "gold"}, {"tenor": 0.0}, {"build_tranches": 0}):
         with pytest.raises(ValueError):
             simulate("2010-01-04", "2010-03-01", file=f, **kw)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
@@ -217,13 +238,22 @@ def test_input_validation(tmp_path: Path) -> None:
 
 
 def test_real_data_1997_path_and_rolling_starts() -> None:
-    p, info = simulate("1997-09-09", "2026-09-14", build_tranches=1)
+    p, info = simulate("1997-09-09", "2026-09-14", build_tranches=1, replace_worthless=False)   # the lapse rule
     assert 0.10 < info.premium0 < 0.25 and 0.40 < info.delta0 < 0.60 and 330 * M < info.rotation < 400 * M and info.notional0 == pytest.approx(info.rotation / info.delta0) and not info.fallback
     assert p["ltv_A"].iloc[0] == pytest.approx(0.25 / 0.75) and 0.60 < p["ltv_A"].max() < 0.75 and (p["headroom_A"] > 0).all()   # LTV = loan / (75 % × equity): never 100 %
     # the Sep-1997 call expires worthless in Sep-2002 and lapses (user's rule): one expiry, nothing bought, no calls afterwards
     assert len(info.rolls) == 1 and info.rolls[0].date.year == 2002 and info.rolls[0].payoff == 0.0 and info.rolls[0].premium_paid == 0.0 and (p["call_notional"].loc["2002-09-10":] == 0).all()
-    _, info_r = simulate("1997-09-09", "2026-09-14", build_tranches=1, replace_worthless=True)   # option: always replace → five rolls, every premium paid
-    assert len(info_r.rolls) == 5 and all(r.premium_paid > 0 for r in info_r.rolls)
+    _, info_r = simulate("1997-09-09", "2026-09-14", build_tranches=1)   # default: always replace → five rolls, every premium paid; the 2002 one by selling SPX delta-for-delta
+    assert len(info_r.rolls) == 5 and all(r.premium_paid > 0 for r in info_r.rolls) and info_r.rolls[0].payoff == 0.0 and info_r.rolls[0].equity_sold > info_r.rolls[0].premium_paid
+    # the doubling ratchet meets its limit: the Sept-2012 replacement (worthless expiry after the 2007 doubling) cannot be funded even by selling every unit of SPX,
+    # so it is cut to cash/c + SPX/δ, all the SPX goes, the excess over the premium to T-bills; the run continues with calls and T-bills only
+    p_r, _ = simulate("1997-09-09", "2026-09-14", build_tranches=1)
+    r12 = info_r.rolls[2]
+    k12 = p_r.index.get_loc(r12.date)
+    assert r12.date.year == 2012 and r12.cut and not any(r.cut for r in info_r.rolls[:2]) and p_r["E_B"].iloc[k12] == pytest.approx(0.0, abs=1.0)
+    assert p_r["cash_B"].iloc[k12] == pytest.approx(p_r["cash_B"].iloc[k12 - 1] + p_r["cash_int_B"].iloc[k12] + r12.payoff - r12.premium_paid + r12.equity_sold, rel=1e-9)   # Δcash = bill interest + payoff − premium + SPX sold
+    rs_r = rolling_starts(pd.DatetimeIndex(["1997-09-09"]), 0.0, build_tranches=1, until="2026-09-14")
+    assert rs_r["B: cut rolls"].iloc[0] == sum(1 for r in info_r.rolls if r.cut) >= 1 and rs_r["B: lapsed"].iloc[0] == 0
     k = int(p["drawdown"].to_numpy().argmin())   # the deepest fall on the record (March 2009): B's capacity to borrow beats A's room
     assert p.index[k].year == 2009 and p["cap_B"].iloc[k] > p["headroom_A"].iloc[k] > 0
     rs = rolling_starts(pd.date_range("1997-10-01", "2021-09-01", freq="MS"), 5.0, build_tranches=1)
@@ -258,14 +288,14 @@ def test_weekly_ladder_repays_the_loan_step_by_step(tmp_path: Path) -> None:
 
 
 def test_weekly_ladder_real_data() -> None:
-    p, info = simulate("1997-09-09", "2026-09-14")   # default: 52 weekly tranches
+    p, info = simulate("1997-09-09", "2026-09-14", replace_worthless=False)   # 52 weekly tranches, the lapse rule
     assert len(info.builds) == 52 and info.build_end.year == 1998 and (p["loan_B"].loc[info.build_end:] == 0).all()
     assert p["n_calls"].iloc[0] == 1 and p["n_calls"].loc[info.build_end] == 52 and (p["n_calls"].loc[info.build_end:"2002-09-01"] == 52).all() and (p["n_calls"].loc["2003-09-03":] == 0).all()   # 52 alive after the build, all lapsed by Sep-2003
     assert 0.0 < (p["loan_B"] / p["cap_B"]).max() < 0.5
     assert len(info.rolls) == 52 and all(r.payoff == 0.0 and r.premium_paid == 0.0 for r in info.rolls)   # all 52 tranches expire worthless in 2002–03 and lapse
     assert p["nav_B"].iloc[0] == pytest.approx(p["nav_A"].iloc[0])
-    _, info_r = simulate("1997-09-09", "2026-09-14", replace_worthless=True)
-    assert len(info_r.rolls) >= 52 * 5   # always replace: each tranche rolls every five years
+    _, info_r = simulate("1997-09-09", "2026-09-14")
+    assert len(info_r.rolls) >= 52 * 5   # default, always replace: each tranche rolls every five years
 
 
 def test_starts_table_is_the_rows_in_millions(tmp_path: Path) -> None:
