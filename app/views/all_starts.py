@@ -81,8 +81,15 @@ st.caption(f"The same two portfolios put on at every {'trading day' if freq == '
               "bought so far. " if rotating.any() else "")
            + (f"**{int(unexpired.sum()):,} starts (after {expiry_cut:%d %b %Y}) have calls that have not yet expired**: their NAV on the end day is a model mark, "
               "not a settled outcome. " if unexpired.any() else "Every start has had all its calls expire at least once. ")
-           + f"The rotation: {s.tenor:g}-year ATM calls on SPXFP, {s.build} weekly step{'s' if s.build > 1 else ''}, the loan gone after the build; a call that expires in the money is replaced, "
-           + ("a call that expires worthless lapses." if not s.replace_worthless else "a worthless call is replaced too."))
+           + f"The rotation: {s.tenor:g}-year ATM calls on SPXFP, {s.build} weekly step{'s' if s.build > 1 else ''}, the loan gone after the build; "
+           + {"target": "an expiring call is replaced to close the gap to Keep's exposure" + (f", the exposure checked {'every quarter' if s.rebalance == 'quarterly' else 'every month'} and kept within ±{s.band:.0%} of Keep's" if s.rebalance != "none" else ""),
+              "delta": "an in-the-money call is replaced on the same dollar delta", "units": "an in-the-money call is replaced on the same index units"}[s.roll]
+           + ("; a call that expires worthless lapses." if not s.replace_worthless else "; a worthless call is replaced too."))
+if s.roll == "target" and s.rebalance != "none":
+    n_up, n_down, n_part = int(rs["B: rebalances up"].sum()), int(rs["B: rebalances down"].sum()), int(rs["B: partial rebalances"].sum())
+    st.caption(f"Band trades across the {len(rs):,} starts: **{n_up:,} up** (calls sold, most in the money first, at the mark less {s.haircut * 100:g} vol point{'s' if s.haircut != 0.01 else ''}), "
+               f"**{n_down:,} down** ({'ATM calls' if s.below == 'calls' else 'SPX'} bought from the T-bills), **{n_part:,} partial** (the T-bills ran out); "
+               f"unwind cost {rs['B: unwind cost'].sum() / M:,.0f} m in all, {rs['B: rolls skipped'].sum():,} expiries with nothing to buy (exposure already at Keep's).")
 years = rs["years"]
 ann = pd.DataFrame({A: (1.0 + rs["A return"]) ** (1.0 / years) - 1.0, B: (1.0 + rs["B return"]) ** (1.0 / years) - 1.0}, index=rs.index)
 lost_all = rs["B: call notional end"] <= 0.0                       # no call left today: the whole option part lapsed
@@ -278,6 +285,30 @@ st.caption(f"Top: on {end_day:%d %b %Y}, for each start date, the room before a 
            "yellow far from a margin call and orange close to it (the call comes at 100 %, the dotted line; the further SPX fall to it is 1 − LTV). "
            "Bottom: the net, Rotate − Keep on the same start, shaded blue where the rotation has more dry powder and red where it has less. "
            "Dotted vertical lines: the market peaks; dashed: the bottoms. Same selection and zoom window as the NAV chart above; the labels mark each portfolio's lowest dry powder inside the window with the other's on that start.")
+
+# ---------------- the rotation's exposure relative to Keep's, over time, across the selected starts
+st.subheader("Exposure of the rotation relative to Keep's, over time")
+ratio_w = (paths["exposure_B"][sel_all] / paths["exposure_A"][sel_all]) if len(sel_all) else pd.DataFrame()
+if not ratio_w.empty:
+    alive = ratio_w.notna().sum(axis=1)
+    ratio_w = ratio_w[alive > 0]
+    med, lo5, hi95 = ratio_w.median(axis=1), ratio_w.quantile(0.05, axis=1), ratio_w.quantile(0.95, axis=1)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hi95.index, y=hi95, name="95th percentile", line={"color": BLUE, "width": 0.8, "dash": "dot"}, hovertemplate="%{x|%d %b %Y}: %{y:.2f}<extra>95th percentile</extra>"))
+    fig.add_trace(go.Scatter(x=lo5.index, y=lo5, name="5th percentile", line={"color": BLUE, "width": 0.8, "dash": "dot"}, fill="tonexty", fillcolor="rgba(11, 42, 111, 0.15)", hovertemplate="%{x|%d %b %Y}: %{y:.2f}<extra>5th percentile</extra>"))
+    fig.add_trace(go.Scatter(x=med.index, y=med, name="median across the starts alive", line={"color": BLUE, "width": 1.8}, hovertemplate="%{x|%d %b %Y}: %{y:.2f}<extra>median</extra>"))
+    fig.add_hline(y=1.0, line={"color": RED, "width": 1.2}, annotation={"text": "Keep's exposure", "font": {"size": 10, "color": RED}}, annotation_position="top left")
+    if s.roll == "target" and s.rebalance != "none":
+        for edge in (1.0 + s.band, 1.0 - s.band):
+            fig.add_hline(y=edge, line={"color": ORANGE, "width": 1, "dash": "dash"}, annotation={"text": f"band edge {edge:.2f}", "font": {"size": 10, "color": ORANGE}}, annotation_position="top left")
+    fig.update_yaxes(title_text="rotation's exposure ÷ Keep's", rangemode="tozero")
+    fig.update_xaxes(title_text="Date")
+    fig.update_layout(height=380, title={"text": f"Live exposure of the rotation ÷ Keep's SPX value, month by month across the {len(sel_all):,} selected starts", "x": 0.02, "font": {"size": 15}},
+                      **{**LAYOUT, "legend": {"orientation": "h", "y": -0.2, "x": 0, "yanchor": "top"}})
+    st.plotly_chart(fig, width="stretch")
+    st.caption("The rotation's live exposure (its SPX plus the dollar delta of its calls, model delta of the day) divided by Keep's SPX value, on each month-end, across the selected starts alive on that date: "
+               "median and 5th–95th percentile band. It is 1 on every start day and, under *Keep's exposure*, 1 again after every roll and inside the band on every funded check day "
+               "(dashed lines); between checks it drifts with the calls' delta — up in a rally, down in a fall. Under the two earlier rules it shows how far the exposure runs from Keep's.")
 
 # ---------------- statistics of the final NAV over the selected starts (every start of the selected years, not subsampled)
 nav0 = (s.equity - s.loan) / M

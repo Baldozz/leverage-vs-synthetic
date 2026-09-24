@@ -47,10 +47,16 @@ def test_all_starts_page_weekly_grid() -> None:
     assert not at.exception, [e.value for e in at.exception]
     # nothing runs until the button is pressed: an info message, no chart, the button enabled
     assert len(at.get("plotly_chart")) == 0 and len(at.table) == 0 and any("press **Launch simulation**" in i.value for i in at.info) and not at.button(key="r_launch").proto.disabled
+    # the sidebar defaults: Keep's exposure with the quarterly band; the band widgets enabled, the surplus radio greyed out
+    assert at.radio(key="s_roll").value == "Keep's exposure" and at.radio(key="s_rebalance").value == "every quarter" and at.number_input(key="s_band").value == 10.0 and at.number_input(key="s_haircut").value == 1.0
+    assert at.radio(key="s_below").value == "ATM calls" and not at.radio(key="s_rebalance").proto.disabled and at.radio(key="s_surplus").proto.disabled and any("Not used under Keep's exposure" in c.value for c in at.caption)
+    # this block runs the same dollar delta rule (the values below were established on it); the default rule is launched further down
+    at.radio(key="s_roll").set_value("the same dollar delta").run()
+    assert at.radio(key="s_rebalance").proto.disabled and at.number_input(key="s_band").proto.disabled and not at.radio(key="s_surplus").proto.disabled
     at.button(key="r_launch").click().run()
     assert not at.exception, [e.value for e in at.exception]
     assert at.button(key="r_launch").proto.disabled and not at.info   # launched: greyed out until something changes
-    assert len(at.get("plotly_chart")) == 4 and len(at.dataframe) == 1 and len(at.table) == 5   # two fans + NAV and dry powder by start date; the corrections dataframe; tables: distribution, one per bottom (4)
+    assert len(at.get("plotly_chart")) == 5 and len(at.dataframe) == 1 and len(at.table) == 5   # two fans + NAV and dry powder by start date + the exposure ratio; the corrections dataframe; tables: distribution, one per bottom (4)
     assert any("1,513 lines" in c.value for c in at.caption)   # every weekly start from 12 Sep 1997 to 4 Sep 2026 (a week before the end day)
     assert any("**50 of the 1,513 starts (after 26 Sep 2025) were still rotating on 14 Sep 2026**" in c.value for c in at.caption)   # a loan left on the end day: the 52nd step of a 26 Sep 2025 start falls on the last day
     assert any("**311 starts (after 22 Sep 2020) have calls that have not yet expired**" in c.value for c in at.caption)   # the starts beyond the "all calls expired" cut
@@ -197,11 +203,36 @@ def test_all_starts_page_weekly_grid() -> None:
     at.selectbox(key="r_end").set_value(at.selectbox(key="r_end").options[0]).run()
     at.button(key="r_launch").click().run()
     assert any("0 of the 1,513 starts had at least one call expire worthless" in c.value for c in at.caption)
-    assert at.radio(key="s_roll").value == "the same dollar delta" and at.radio(key="s_worthless").value == "replaced, SPX sold to pay it"   # the sidebar defaults
+    assert at.radio(key="s_roll").value == "the same dollar delta" and at.radio(key="s_worthless").value == "replaced, SPX sold to pay it"   # as set above; the worthless default
     at.radio(key="s_roll").set_value("the same index units").run()
     assert not at.button(key="r_launch").proto.disabled   # a rule change is a new run
     at.radio(key="s_roll").set_value("the same dollar delta").run()
     assert at.button(key="r_launch").proto.disabled
+    # no band trades under the dollar-delta rule: no band caption, the ratio chart without band edges
+    assert not any("Band trades across" in c.value for c in at.caption)
+    ratio_fig = json.loads(at.get("plotly_chart")[4].proto.spec)
+    assert [t["name"] for t in ratio_fig["data"]] == ["95th percentile", "5th percentile", "median across the starts alive"] and not any("band edge" in a["text"] for a in ratio_fig["layout"].get("annotations", []))
+    # the default rule, Keep's exposure with the quarterly band: launched on the same grid — the header counts, the ratio chart against the engine on the first start
+    at.radio(key="s_roll").set_value("Keep's exposure").run()
+    assert not at.button(key="r_launch").proto.disabled
+    at.button(key="r_launch").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    band_line = next(c.value for c in at.caption if "Band trades across the 1,513 starts" in c.value)
+    assert "up** (calls sold, most in the money first, at the mark less 1 vol point)" in band_line and "down** (ATM calls bought from the T-bills)" in band_line
+    ratio_fig = json.loads(at.get("plotly_chart")[4].proto.spec)
+    assert {a["text"] for a in ratio_fig["layout"]["annotations"]} >= {"band edge 1.10", "band edge 0.90", "Keep's exposure"}
+    med = ratio_fig["data"][2]
+    rows_t, paths_t = rolling_paths(pd.date_range("1997-09-12", "1997-10-31", freq="W-FRI"), "2026-09-14", columns=("exposure_A", "exposure_B"), sample="M")   # the first eight weekly starts, default rule
+    ratio_t = paths_t["exposure_B"] / paths_t["exposure_A"]
+    alive = ratio_t.loc["1997-09-30"].dropna()   # on the first month-end the 12, 19 and 26 Sep 1997 starts are alive: the chart's median is theirs
+    assert med["x"][0].startswith("1997-09-30") and len(alive) == 3 and abs(med["y"][0] - float(alive.median())) < 1e-9
+    assert (abs(alive - 1.0) < 0.05).all() and 0.6 < min(med["y"]) < 0.8 and 1.1 < max(med["y"]) < 1.3   # 2002: the early starts sit at 0.7× with no T-bills to buy with (Limitations 17); rallies run to the top of the band
+    n_up = int(band_line.split("**")[1].split(" up")[0].replace(",", ""))
+    assert n_up >= int(rows_t["B: rebalances up"].sum()) > 0   # the header counts every selected start; the first eight are part of it
+    assert any("an expiring call is replaced to close the gap to Keep's exposure, the exposure checked every quarter and kept within ±10% of Keep's" in c.value for c in at.caption)
+    at.radio(key="s_roll").set_value("the same dollar delta").run()
+    at.button(key="r_launch").click().run()
+    assert not at.exception, [e.value for e in at.exception]
     # the lapse rule: switch the sidebar to "not replaced" and relaunch — the rotations that let a call lapse are back (orange lines and profile), the 1997–2001 starts lose every call
     at.radio(key="s_worthless").set_value("not replaced").run()
     at.button(key="r_launch").click().run()
