@@ -111,9 +111,10 @@ def test_all_starts_page_weekly_grid() -> None:
     j_l = max(range(1513), key=lambda j: dp[2]["y"][j])
     assert any(a["text"] == f"<span style='color:#c9a000'><b>LTV {dp[2]['y'][j_l]:.0f} %</b></span> · {pd.Timestamp(dp[2]['x'][j_l]):%d %b %Y}" for a in dp_lay["annotations"])   # the highest LTV labelled in yellow
     assert any(a["text"] == "margin call (LTV 90%)" for a in dp_lay["annotations"]) and dp[2]["marker"]["cmax"] == 90.0 and dp[2]["marker"]["colorbar"]["orientation"] == "h"   # the call level at 90 %, the colour bar at the bottom
-    for i_ in (2, 3, 4):   # the three charts by date share fixed margins, so their plot areas line up
+    for i_ in (2, 3, 4):   # the three charts by date share fixed margins and the full width, so their plot areas line up
         lay_i = json.loads(at.get("plotly_chart")[i_].proto.spec)["layout"]
-        assert lay_i["margin"]["l"] == 80 and lay_i["margin"]["r"] == 80 and lay_i["yaxis"]["automargin"] is False
+        assert lay_i["margin"]["l"] == 80 and lay_i["margin"]["r"] == 80 and lay_i["yaxis"]["automargin"] is False and lay_i["xaxis"].get("domain", [0.0, 1.0]) == [0.0, 1.0]
+    assert dp_lay["xaxis"]["domain"] == [0.0, 1.0] and dp_lay["xaxis2"]["domain"] == [0.0, 1.0]   # the secondary LTV axis no longer takes 6 % of the width
     # the profiles beside the fans: the lowest, median and highest final NAV are labelled on the right axis
     fan_a = json.loads(at.get("plotly_chart")[0].proto.spec)["layout"]["yaxis2"]
     assert [t.split(" ")[0] for t in fan_a["ticktext"]] == ["min", "median", "max"] and fan_a["tickvals"][0] == pytest.approx(min(ka["y"])) and fan_a["tickvals"][2] == pytest.approx(max(ka["y"]))

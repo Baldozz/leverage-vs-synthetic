@@ -292,6 +292,7 @@ fig.update_xaxes(title_text="Start date", range=x_win, row=2, col=1)
 fig.update_layout(height=640, title={"text": f"On {end_day:%d %b %Y}: the dry powder of each portfolio and the net, by start date — {len(sel_all):,} starts", "x": 0.02, "font": {"size": 15}},
                   **{**LAYOUT, "legend": {"orientation": "h", "y": -0.12, "x": 0, "yanchor": "top"}, "margin": {**ALIGNED, "b": 150}})
 fig.update_yaxes(automargin=False)
+fig.update_xaxes(domain=[0.0, 1.0])   # the subplot builder reserves 6 % of the width on the right for the secondary axis: take it back, the LTV ticks sit in the fixed margin
 st.plotly_chart(fig, width="stretch")
 st.caption(f"Top: on {end_day:%d %b %Y}, for each start date, the room before a margin call of the loan portfolio ({s.margin_call:.0%} × {s.lv_equity:.0%} × SPX − loan, red) and the dry powder of the rotation "
            f"({s.margin_call:.0%} × ({s.lv_equity:.0%} × SPX + {s.lv_calls:.0%} × calls + {s.lv_cash:.0%} × T-bills) − loan, blue), both in USD m; the dots are the loan portfolio's LTV = loan ÷ lending value on the right axis, "
