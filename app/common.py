@@ -38,10 +38,10 @@ class Setup:
     surplus: str           # "cash" | "equity" | "calls"
     replace_worthless: bool = True    # a call that expires worthless: replaced (True) or lapses (False)
     roll: str = "target"              # what an expiring call is replaced on: "target" (the gap to Keep's exposure), "delta" (the same dollar delta), "units" (the same index units)
-    rebalance: str = "quarterly"      # target rule: when the exposure is checked against the band ("quarterly", "monthly", "none")
+    rebalance: str = "monthly"        # target rule: when the exposure is checked against the band ("quarterly", "monthly", "none")
     band: float = 0.10                # target rule: the band around Keep's exposure, fraction
     haircut: float = 0.01             # target rule: vol points (fraction) taken off the mark on calls sold early
-    below: str = "calls"              # target rule: what is bought from the T-bills below the band ("calls", "spx")
+    below: str = "calls_spx"          # target rule: below the band, "calls" / "spx" from the T-bills, or "calls_spx": calls from the T-bills then from SPX sold for them
 
 
 _SURPLUS = {"kept in T-bills": "cash", "reinvested in SPX": "equity", "reinvested in more calls": "calls"}
@@ -86,7 +86,7 @@ def sidebar_setup() -> Setup:
     """Page 1's sidebar: the two portfolios. Drawn by the entry script when that page is shown; read back with ``setup``. The page itself
     runs only what its *Launch simulation* button last launched (the sidebar setup, the grid, the start year and the end day)."""
     for k, v in (("s_equity", 1000.0), ("s_loan", 250.0), ("s_spread", 75.0), ("s_lv", 75.0), ("s_margin", 90.0), ("s_weeks", 52), ("s_worthless", "replaced, SPX sold to pay it"), ("s_roll", "Keep's exposure"),
-                 ("s_rebalance", "every quarter"), ("s_band", 10.0), ("s_haircut", 1.0), ("s_below", "ATM calls from the T-bills"),
+                 ("s_rebalance", "every month"), ("s_band", 10.0), ("s_haircut", 1.0), ("s_below", "ATM calls, SPX sold for them when the T-bills run out"),
                  ("s_surplus", "kept in T-bills"), ("s_lv_calls", 0.0), ("s_lv_cash", 90.0), ("s_grid", "every trading day")):
         _restore(k, v)
     with st.sidebar:

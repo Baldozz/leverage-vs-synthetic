@@ -101,7 +101,7 @@ def test_roll_cash_flows_rising_and_falling(tmp_path: Path) -> None:
     assert p["call_notional"].iloc[k] == pytest.approx(info.units0 * ST)
     down = 1000.0 * np.exp(-0.05 * np.arange(n) / 262)
     fd = _file(tmp_path, down, base=0.0, tbill=0.0, rate=0.0, name="down.csv")
-    p2, info2 = simulate("2010-01-04", "2015-12-31", build_tranches=1, replace_worthless=False, file=fd)   # option: a worthless call lapses, nothing bought, no SPX sold
+    p2, info2 = simulate("2010-01-04", "2015-12-31", build_tranches=1, replace_worthless=False, roll="delta", file=fd)   # option: a worthless call lapses, nothing bought, no SPX sold (delta rule: no band trades after it)
     r2 = info2.rolls[0]
     k2 = p2.index.get_loc(r2.date)
     assert r2.payoff == 0.0 and r2.premium_paid == 0.0 and r2.equity_sold == 0.0 and p2["cash_B"].iloc[k2] == 0.0
@@ -187,16 +187,16 @@ def test_rolling_start_row_equals_single_path(tmp_path: Path) -> None:
     seen: list[tuple[int, int]] = []
     rolling_starts(starts, 5.0, build_tranches=1, file=f, progress=lambda i, n: seen.append((i, n)))
     assert seen and seen[-1] == (3, 3)
-    rs2 = rolling_starts(starts, 5.0, build_tranches=1, replace_worthless=False, file=f, until="2017-12-29")   # every start runs to the same end date; the lapse rule, to count lapses
+    rs2 = rolling_starts(starts, 5.0, build_tranches=1, replace_worthless=False, roll="delta", file=f, until="2017-12-29")   # every start runs to the same end date; the lapse rule (delta rule: no band trades), to count lapses
     assert len(rs2) == 3 and (rs2["end"] == rs2["end"].iloc[0]).all() and rs2["rolls"].tolist() == [1, 1, 0]
     assert (rs2["build end"] == rs2.index).all()
-    pu, iu = simulate("2010-06-01", "2017-12-29", build_tranches=1, replace_worthless=False, file=f)   # the first row against its own single path (its one call expired worthless on this random path)
+    pu, iu = simulate("2010-06-01", "2017-12-29", build_tranches=1, replace_worthless=False, roll="delta", file=f)   # the first row against its own single path (its one call expired worthless on this random path)
     lapsed = [r for r in iu.rolls if r.payoff == 0.0 and r.premium_paid == 0.0]
     assert rs2["B: lapsed"].iloc[0] == len(lapsed) == 1 and rs2["B: calls lost on"].iloc[0] == lapsed[0].date and rs2["B: call notional end"].iloc[0] == 0.0 == pu["call_notional"].iloc[-1]
     assert rs2["B: lapsed"].iloc[2] == 0 and pd.isna(rs2["B: calls lost on"].iloc[2]) and rs2["B: call notional end"].iloc[2] > 0   # the 2016 start: no expiry before the end, calls still held
     fd = _file(tmp_path, 1000.0 * np.exp(-0.03 * np.arange(n) / 262), name="down.csv")   # falling path: the one call lapses → the option part is lost at its expiry
-    rs3 = rolling_starts(starts[:1], 5.0, build_tranches=1, replace_worthless=False, file=fd, until="2017-12-29")
-    pd_, i_ = simulate("2010-06-01", "2017-12-29", build_tranches=1, replace_worthless=False, file=fd)
+    rs3 = rolling_starts(starts[:1], 5.0, build_tranches=1, replace_worthless=False, roll="delta", file=fd, until="2017-12-29")
+    pd_, i_ = simulate("2010-06-01", "2017-12-29", build_tranches=1, replace_worthless=False, roll="delta", file=fd)
     assert rs3["B: lapsed"].iloc[0] == 1 and rs3["B: calls lost on"].iloc[0] == i_.rolls[0].date and rs3["B: call notional end"].iloc[0] == 0.0 and (pd_["call_notional"].loc[i_.rolls[0].date:] == 0).all()
     assert rs2["B: min dry powder"].iloc[0] <= rs2["B: dry powder at trough"].iloc[0]
 
@@ -496,13 +496,13 @@ def test_target_roll_closes_the_gap_to_keeps_exposure(tmp_path: Path) -> None:
     # 5. gap ≤ 0: on a long fall the quarterly checks buy calls from a cash buffer (their slots count from their own purchase day); by the expiry the
     #    survivors' slots cover Keep's exposure: nothing bought, the expiry logged as skipped, the payoff (nil) stays in T-bills
     fall = 1000.0 * np.exp(-0.12 * np.arange(n) / 262)
-    p5, i5 = simulate("2010-01-04", "2015-12-31", build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, file=_zero_rates(tmp_path, fall, "fall.csv"))
+    p5, i5 = simulate("2010-01-04", "2015-12-31", build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, below="calls", file=_zero_rates(tmp_path, fall, "fall.csv"))
     assert len(i5.rolls) == 1 and i5.rolls[0].skipped and i5.rolls[0].premium_paid == 0.0 and i5.rolls[0].notional == 0.0 and i5.rolls[0].payoff == 0.0
     k5 = p5.index.get_loc(i5.rolls[0].date)
     t5 = next(t for t in i5.trades if t.event == "roll")
     assert t5.usd_traded == 0.0 and t5.exposure_after == t5.exposure_before and p5["exposure_replaced_B"].iloc[k5] >= p5["E_A"].iloc[k5] - TOL_USD
     assert p5["n_calls"].iloc[k5] == p5["n_calls"].iloc[k5 - 1] - 1 and p5["n_bought"].iloc[k5] == p5["n_bought"].iloc[k5 - 1]   # the expired call gone, nothing added
-    rs = rolling_starts(pd.DatetimeIndex(["2010-01-04"]), 0.0, build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, until="2015-12-31", file=_zero_rates(tmp_path, fall, "fall.csv"))
+    rs = rolling_starts(pd.DatetimeIndex(["2010-01-04"]), 0.0, build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, below="calls", until="2015-12-31", file=_zero_rates(tmp_path, fall, "fall.csv"))
     assert rs["B: rolls skipped"].iloc[0] == 1 and rs["B: lapsed"].iloc[0] == 0 and rs["rolls"].iloc[0] == 1 and rs["B: cut rolls"].iloc[0] == 0
     tbl = starts_table(rs)
     assert tbl["rolls skipped (exposure already at Keep's)"].iloc[0] == 1 and tbl["exposure ratio today"].iloc[0] == pytest.approx(p5["exposure_B"].iloc[-1] / p5["E_A"].iloc[-1], abs=1e-4)
@@ -567,7 +567,7 @@ def test_band_rebalance_down_buys_calls_from_the_t_bills(tmp_path: Path) -> None
     n = 6 * 262
     down = 1000.0 * np.exp(-0.12 * np.arange(n) / 262)   # a long fall: the calls' delta melts, the live exposure drops below the band
     f = _zero_rates(tmp_path, down)
-    p, info = simulate("2010-01-04", "2015-12-31", build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, file=f)   # 150 m of T-bills to buy with
+    p, info = simulate("2010-01-04", "2015-12-31", build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, below="calls", file=f)   # 150 m of T-bills to buy with, nothing sold
     downs = [t for t in info.trades if t.event == "rebalance_down"]
     assert downs and not [t for t in info.trades if t.event == "rebalance_up"]
     t0 = downs[0]
@@ -582,7 +582,7 @@ def test_band_rebalance_down_buys_calls_from_the_t_bills(tmp_path: Path) -> None
     partial = [t for t in downs if t.partial]
     assert partial and p["cash_B"].loc[partial[0].date] == pytest.approx(0.0, abs=1e-6) and partial[0].exposure_after < partial[0].band_edge
     assert (p["unwind_cost_B"] == 0.0).all()
-    rs = rolling_starts(pd.DatetimeIndex(["2010-01-04"]), 0.0, build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, until="2015-12-31", file=f)
+    rs = rolling_starts(pd.DatetimeIndex(["2010-01-04"]), 0.0, build_tranches=1, cash_buffer=150 * M, rebalance="quarterly", band=0.10, below="calls", until="2015-12-31", file=f)
     assert rs["B: rebalances down"].iloc[0] == len({t.date for t in downs}) and rs["B: partial rebalances"].iloc[0] == len({t.date for t in partial})
     assert rs["B: calls bought at rebalances"].iloc[0] == pytest.approx(sum(t.usd_traded for t in downs)) and rs["B: SPX bought at rebalances"].iloc[0] == 0.0
     # the spec's variant: SPX bought instead of calls
@@ -653,28 +653,29 @@ def test_band_check_timing_and_no_trade_cases(tmp_path: Path) -> None:
 
 
 def test_target_rule_on_the_record() -> None:
-    """Real data, the Sep-1997 start under the defaults: the ladder survives the first cycle (each replacement restores its own slot), the
-    replaced exposure equals Keep's after every funded roll, the live exposure sits inside the band on every funded check day, no roll is cut,
-    and the summary row carries the counts."""
+    """Real data, the Sep-1997 start under the defaults (monthly check, calls bought below the band from the T-bills then from SPX sold for
+    them): the replaced exposure equals Keep's after every funded roll, the live exposure sits inside the band on every month-end after the
+    build, nothing is ever left unfunded, no roll is cut; the calls bought in the 2001–02 fall take over the slots of the calls that then
+    expire (skipped rolls), so the ladder thins after the first bear market; the summary row carries the counts."""
     p, info = simulate("1997-09-09", "2026-09-14")
-    assert info.build_end is not None and not any(r.cut for r in info.rolls) and len(info.rolls) >= 100
+    assert info.build_end is not None and not any(r.cut for r in info.rolls) and len(info.rolls) >= 50
     skipped = sum(1 for r in info.rolls if r.skipped)
-    assert skipped <= 5 and p["n_calls"].loc[info.build_end : "2002-06"].min() >= 50 and p["n_calls"].loc["2003-12-31"] >= 40 and 10 <= p["n_calls"].iloc[-1] <= 30
+    assert len(info.rolls) // 3 <= skipped < len(info.rolls) and p["n_calls"].loc[info.build_end : "2001-12"].min() >= 45 and p["n_calls"].loc["2004":].max() <= 20 and p["n_calls"].loc[info.build_end :].min() >= 1
+    band_days = {t.date for t in info.trades if t.event != "roll"}
     for t in info.trades:
-        if t.event == "roll" and t.notional > 0.0:
+        if t.event == "roll" and t.notional > 0.0 and t.date not in band_days:   # (a month-end check after the roll moves it again)
             assert p.loc[t.date, "exposure_replaced_B"] == pytest.approx(t.target, rel=1e-9)   # the roll restores the slot: what the holdings were bought to carry = Keep's
-    q_end = p.index[[*(p.index.to_period("Q")[1:] != p.index.to_period("Q")[:-1]).tolist(), False]]
-    checked = [d for d in q_end if d > info.build_end]
-    partial_days = {t.date for t in info.trades if t.partial}
+    m_end = p.index[[*(p.index.to_period("M")[1:] != p.index.to_period("M")[:-1]).tolist(), False]]
+    checked = [d for d in m_end if d > info.build_end]
     ratio = p["exposure_B"] / p["exposure_A"]
-    assert all(abs(ratio.loc[d] - 1.0) <= 0.10 + 1e-9 for d in checked if d not in partial_days) and len(checked) > 100 and len(partial_days) <= 8
-    assert ratio.iloc[0] == pytest.approx(1.0, abs=1e-4) and 1.15 < ratio.max() < 1.5 and 0.6 < ratio.min() < 0.8   # between checks it drifts with the delta; 2002: no T-bills to buy with
+    assert not any(t.partial for t in info.trades) and all(abs(ratio.loc[d] - 1.0) <= 0.10 + 1e-9 for d in checked) and len(checked) > 300   # SPX always there to fund the shortfall
+    assert ratio.iloc[0] == pytest.approx(1.0, abs=1e-4) and 1.1 < ratio.max() < 1.3 and 0.7 < ratio.min() < 0.85   # between checks it drifts with the delta
     assert p["unwind_cost_B"].sum() > 0.0 and (p["unwind_cost_B"] >= 0.0).all()   # 1 vol point off the mark on every early sale
     ups, downs = [t for t in info.trades if t.event == "rebalance_up"], [t for t in info.trades if t.event == "rebalance_down"]
-    assert ups and downs and p["n_bought"].iloc[-1] == 52 + sum(1 for r in info.rolls if r.notional > 0.0) + sum(1 for t in downs if t.notional > 0.0)
+    assert ups and downs and any(t.spx_usd < 0.0 for t in downs) and p["n_bought"].iloc[-1] == 52 + sum(1 for r in info.rolls if r.notional > 0.0) + sum(1 for t in downs if t.notional > 0.0)
     rs = rolling_starts(pd.DatetimeIndex(["1997-09-09"]), 0.0, until="2026-09-14")
     row = rs.iloc[0]
-    assert row["B: rebalances up"] == len({t.date for t in ups}) >= 1 and row["B: rebalances down"] == len({t.date for t in downs}) >= 1 and row["B: cut rolls"] == 0
-    assert row["end: exposure B"] == pytest.approx(p["exposure_B"].iloc[-1]) and row["B: rolls skipped"] == skipped
+    assert row["B: rebalances up"] == len({t.date for t in ups}) >= 1 and row["B: rebalances down"] == len({t.date for t in downs}) >= 1 and row["B: cut rolls"] == 0 and row["B: partial rebalances"] == 0
+    assert row["end: exposure B"] == pytest.approx(p["exposure_B"].iloc[-1]) and row["B: rolls skipped"] == skipped and row["B: SPX sold at rebalances"] == pytest.approx(-sum(t.spx_usd for t in downs)) and row["B: SPX sold at rebalances"] > 0
     assert row["B: unwind cost"] == pytest.approx(p["unwind_cost_B"].sum()) and len(row["B: trades"]) == len(info.trades)
     assert 0.8 < row["NAV B end"] / row["NAV A end"] < 1.25   # risk-matched: the two portfolios end in the same region

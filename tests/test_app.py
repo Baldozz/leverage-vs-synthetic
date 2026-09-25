@@ -47,9 +47,9 @@ def test_all_starts_page_weekly_grid() -> None:
     assert not at.exception, [e.value for e in at.exception]
     # nothing runs until the button is pressed: an info message, no chart, the button enabled
     assert len(at.get("plotly_chart")) == 0 and len(at.table) == 0 and any("press **Launch simulation**" in i.value for i in at.info) and not at.button(key="r_launch").proto.disabled
-    # the sidebar defaults: Keep's exposure with the quarterly band; the band widgets enabled, the surplus radio greyed out
-    assert at.radio(key="s_roll").value == "Keep's exposure" and at.radio(key="s_rebalance").value == "every quarter" and at.number_input(key="s_band").value == 10.0 and at.number_input(key="s_haircut").value == 1.0
-    assert at.radio(key="s_below").value == "ATM calls from the T-bills" and list(at.radio(key="s_below").options) == ["ATM calls from the T-bills", "SPX from the T-bills", "ATM calls, SPX sold for them when the T-bills run out"] and not at.radio(key="s_rebalance").proto.disabled and at.radio(key="s_surplus").proto.disabled and any("Not used under Keep's exposure" in c.value for c in at.caption)
+    # the sidebar defaults: Keep's exposure with the monthly band, calls bought below it from the T-bills then from SPX sold for them; the band widgets enabled, the surplus radio greyed out
+    assert at.radio(key="s_roll").value == "Keep's exposure" and at.radio(key="s_rebalance").value == "every month" and at.number_input(key="s_band").value == 10.0 and at.number_input(key="s_haircut").value == 1.0
+    assert at.radio(key="s_below").value == "ATM calls, SPX sold for them when the T-bills run out" and list(at.radio(key="s_below").options) == ["ATM calls from the T-bills", "SPX from the T-bills", "ATM calls, SPX sold for them when the T-bills run out"] and not at.radio(key="s_rebalance").proto.disabled and at.radio(key="s_surplus").proto.disabled and any("Not used under Keep's exposure" in c.value for c in at.caption)
     # this block runs the same dollar delta rule (the values below were established on it); the default rule is launched further down
     at.radio(key="s_roll").set_value("the same dollar delta").run()
     assert at.radio(key="s_rebalance").proto.disabled and at.number_input(key="s_band").proto.disabled and not at.radio(key="s_surplus").proto.disabled
@@ -223,13 +223,14 @@ def test_all_starts_page_weekly_grid() -> None:
     assert not any("Band trades across" in c.value for c in at.caption)
     ratio_fig = json.loads(at.get("plotly_chart")[4].proto.spec)
     assert [t["name"] for t in ratio_fig["data"]] == ["95th percentile", "5th percentile", "median across the starts alive"] and not any("band edge" in a["text"] for a in ratio_fig["layout"].get("annotations", []))
-    # the default rule, Keep's exposure with the quarterly band: launched on the same grid — the header counts, the ratio chart against the engine on the first start
+    # the default rule, Keep's exposure with the monthly band: launched on the same grid — the header counts, the ratio chart against the engine on the first start
     at.radio(key="s_roll").set_value("Keep's exposure").run()
     assert not at.button(key="r_launch").proto.disabled
     at.button(key="r_launch").click().run()
     assert not at.exception, [e.value for e in at.exception]
     band_line = next(c.value for c in at.caption if "Band trades across the 1,513 starts" in c.value)
-    assert "up** (calls sold, most in the money first, at the mark less 1 vol point)" in band_line and "down** (ATM calls bought from the T-bills)" in band_line
+    assert "up** (calls sold, most in the money first, at the mark less 1 vol point)" in band_line and "down** (ATM calls bought from the T-bills, then from SPX sold for them — " in band_line
+    assert " m of SPX sold in all), **" in band_line and "partial** (the T-bills and the SPX ran out)" in band_line
     ratio_fig = json.loads(at.get("plotly_chart")[4].proto.spec)
     assert {a["text"] for a in ratio_fig["layout"]["annotations"]} >= {"band edge 1.10", "band edge 0.90", "Keep's exposure"}
     med = ratio_fig["data"][2]
@@ -237,10 +238,10 @@ def test_all_starts_page_weekly_grid() -> None:
     ratio_t = paths_t["exposure_B"] / paths_t["exposure_A"]
     alive = ratio_t.loc["1997-09-30"].dropna()   # on the first month-end the 12, 19 and 26 Sep 1997 starts are alive: the chart's median is theirs
     assert med["x"][0].startswith("1997-09-30") and len(alive) == 3 and abs(med["y"][0] - float(alive.median())) < 1e-9
-    assert (abs(alive - 1.0) < 0.05).all() and 0.6 < min(med["y"]) < 0.8 and 1.1 < max(med["y"]) < 1.3   # 2002: the early starts sit at 0.7× with no T-bills to buy with (Limitations 17); rallies run to the top of the band
+    assert (abs(alive - 1.0) < 0.05).all() and 0.7 < min(med["y"]) < 0.95 and 1.05 < max(med["y"]) < 1.3   # between month-ends the median drifts with the delta; SPX sold for calls keeps the early starts near the band in 2001–02
     n_up = int(band_line.split("**")[1].split(" up")[0].replace(",", ""))
     assert n_up >= int(rows_t["B: rebalances up"].sum()) > 0   # the header counts every selected start; the first eight are part of it
-    assert any("an expiring call is replaced to close the gap to Keep's exposure, the exposure checked every quarter and kept within ±10% of Keep's" in c.value for c in at.caption)
+    assert any("an expiring call is replaced to close the gap to Keep's exposure, the exposure checked every month and kept within ±10% of Keep's" in c.value for c in at.caption)
     at.radio(key="s_roll").set_value("the same dollar delta").run()
     at.button(key="r_launch").click().run()
     assert not at.exception, [e.value for e in at.exception]

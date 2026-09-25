@@ -2,8 +2,9 @@
 
     .venv/bin/python scripts/roll_rule_comparison.py            # ≈ 10 minutes: four runs of every weekly start since 1997, held to today
 
-Five rotations against the same loan portfolio — Keep's exposure (the default: 1 vol point off the mark on calls sold early), Keep's
-exposure with no haircut, Keep's exposure with SPX sold for calls when the T-bills run out below the band, the same dollar delta, the same index units — with the headline tables of the investor recap (value today,
+Five rotations against the same loan portfolio — Keep's exposure (the default: a monthly check, 1 vol point off the mark on calls sold
+early, calls bought below the band from the T-bills then from SPX sold for them), Keep's exposure with no haircut, Keep's exposure with a
+quarterly check and the T-bills only below the band, the same dollar delta, the same index units — with the headline tables of the investor recap (value today,
 the market bottoms) side by side, settled starts (every call expired at least once) apart from the unsettled ones, and the mechanics of
 the target rule (band trades, unwind cost, exposure ratio, the ladder). Default setup otherwise (1 bn SPX, 250 m loan, SOFR + 75 bp,
 75 % / 0 % / 90 % lending values, 5-year calls, 52 weekly steps, 15 % withholding).
@@ -30,9 +31,9 @@ from fosim.analytics.leverage_stress import (  # noqa: E402
 
 M = 1e6
 RULES: dict[str, dict[str, object]] = {
-    "Keep's exposure (1 vol pt)": {"roll": "target"},
+    "Keep's exposure (default)": {"roll": "target"},
     "Keep's exposure (no haircut)": {"roll": "target", "unwind_haircut": 0.0},
-    "Keep's exposure (SPX sold below the band)": {"roll": "target", "below": "calls_spx"},
+    "Keep's exposure (quarterly, T-bills only below the band)": {"roll": "target", "rebalance": "quarterly", "below": "calls"},
     "Same dollar delta": {"roll": "delta"},
     "Same index units": {"roll": "units"},
 }
@@ -78,8 +79,9 @@ def main() -> None:
         "",
         "**The rules.** *Keep's exposure* (default): at every expiry the replacement closes the gap between Keep's SPX value and what the rotation's holdings were bought "
         "to carry (its SPX plus each surviving call's slot, grown with the index), so each replacement restores its own slot; paid from the payoff and the T-bills, then by "
-        "selling SPX; every quarter-end the live exposure (SPX + the calls' dollar delta) is brought back inside "
-        "±10 % of Keep's — calls sold, most in the money first, at the model mark less 1 vol point (or at the mark: *no haircut*), calls bought from the T-bills (*SPX sold below the band*: and, once the T-bills are gone, from SPX sold for them, s = rest ÷ (δ/c − 1)). "
+        "selling SPX; every month-end the live exposure (SPX + the calls' dollar delta) is brought back inside "
+        "±10 % of Keep's — calls sold, most in the money first, at the model mark less 1 vol point (or at the mark: *no haircut*), calls bought from the T-bills and, once they are gone, "
+        "from SPX sold for them, s = rest ÷ (δ/c − 1) (*quarterly, T-bills only*: the check every quarter and nothing sold to fund it — the default before 25 September). "
         "*Same dollar delta*: an in-the-money call is replaced by an ATM call with the same dollar delta (about twice the units; the option units double at every "
         "in-the-money expiry). *Same index units*: replaced on the same index units. Under the last two a worthless call is replaced on the same units, SPX is sold "
         "delta-for-delta and no band applies.",
@@ -151,8 +153,9 @@ def main() -> None:
         ratio_rows.append(f"{r.quantile(0.05):.2f} / {r.median():.2f} / {r.quantile(0.95):.2f}")
     mech.append(["exposure ÷ Keep's today: 5th / median / 95th pct", *ratio_rows])
     out += [md_table(hdr, mech), "",
-            "Each replacement restores its own slot, so the weekly ladder survives the expiries; the band sales remove whole tranches over time. Between quarterly "
-            "checks the live exposure drifts with the delta; on the check days it is inside the band unless the T-bills were short (partial).", "",
+            "Each replacement restores its own slot; the band's purchases in a long fall take over the slots of the calls that then expire (skipped rolls), and its sales "
+            "remove whole tranches over time, so the weekly ladder thins to a handful of calls. Between monthly checks the live exposure drifts with the delta; on the "
+            "check days it is inside the band unless nothing was left to fund it (partial).", "",
             f"Run time {time.perf_counter() - t0:.0f} s."]
     target = ROOT / "reports" / "roll_rule_comparison.md"
     target.write_text("\n".join(out) + "\n")

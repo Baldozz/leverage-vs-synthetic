@@ -15,8 +15,8 @@ with interest capitalised, other investments funded by the loan (0 % LTV, exclud
                   at expiry the payoff is cashed and the replacement closes the gap between A's exposure E_A and what B's holdings
                   were bought to carry, E_B + Σ δ_buy · N · TR(t)/TR(buy) (``roll="target"``, default: N = gap/δ from the payoff and
                   the T-bills, else N = (gap − cash)/(δ − c) with c·N − cash of SPX sold; a gap ≤ 0 buys nothing), and on each
-                  quarter-end after the build the live exposure E_B + Σ units · δ(t) · S is brought back inside ±band of E_A (calls sold, most in the money first, at the mark less the
-                  unwind haircut; calls bought from the T-bills); the earlier rules: a new ATM call on the same dollar delta
+                  month-end after the build the live exposure E_B + Σ units · δ(t) · S is brought back inside ±band of E_A (calls sold, most in the money first, at the mark less the
+                  unwind haircut; calls bought from the T-bills, then from SPX sold for them); the earlier rules: a new ATM call on the same dollar delta
                   (``roll="delta"``: notional units · S_T / δ_new) or on the same index units (``roll="units"``), paid from the
                   payoff, then cash, then by selling equity delta-for-delta (the share of the tranche the SPX pays for gives up
                   δ · its notional of SPX, the excess over the premium goes to T-bills); the payoff left over: T-bills, equity or
@@ -139,7 +139,7 @@ def simulate(
     start: str | pd.Timestamp, end: str | pd.Timestamp, equity0: float = 1000e6, loan0: float = 250e6, spread: float = 0.0075,
     ltv_equity: float = 0.75, ltv_call: float = 0.0, ltv_cash: float = 0.90, margin_call: float = 0.90, tenor: float = 5.0, wht: float = 0.15,  # ltv_* are lending values (advance rates)
     surplus: str = "cash", cash_buffer: float = 0.0, delta: float | None = None, build_tranches: int = 52, replace_worthless: bool = True,
-    roll: str = "target", rebalance: str = "quarterly", band: float = 0.10, unwind_haircut: float = 0.01, below: str = "calls",
+    roll: str = "target", rebalance: str = "monthly", band: float = 0.10, unwind_haircut: float = 0.01, below: str = "calls_spx",
     file: Path | str | None = None,
 ) -> tuple[pd.DataFrame, StressInfo]:
     """Daily path of both setups from ``start`` to ``end`` (nearest trading days). See the module docstring.
@@ -166,9 +166,9 @@ def simulate(
     build, if the live exposure is above (1 + band) × E_A the excess is sold from the calls, most in the money first (highest S/K, then
     the earliest expiry), partial tranches allowed, at the model mark with ``unwind_haircut`` (vol points, fraction) taken off the vol,
     proceeds to T-bills, mark − sale booked as ``unwind_cost_B``; if it is below (1 − band) × E_A the shortfall is bought from the
-    T-bills — ATM calls of the tenor (``below="calls"``, default) or SPX (``"spx"``) — as far as the T-bills go (``Trade.partial``);
-    ``"calls_spx"`` goes on when the T-bills run out by selling SPX for calls, s = rest / (δ/c − 1) of SPX for s/c of premium (each
-    dollar switched adds δ/c − 1 of exposure), as far as the SPX goes.
+    T-bills — ATM calls of the tenor (``below="calls"``) or SPX (``"spx"``) — as far as the T-bills go (``Trade.partial``);
+    ``"calls_spx"`` (default) goes on when the T-bills run out by selling SPX for calls, s = rest / (δ/c − 1) of SPX for s/c of premium
+    (each dollar switched adds δ/c − 1 of exposure), as far as the SPX goes. ``rebalance="monthly"`` by default.
     A roll and a check on the same day: the roll first. Every decision is logged in ``StressInfo.trades``.
     ``cash_buffer``: extra equity rotated at t₀ so that B keeps this much cash after repaying the loan (0 = fully invested).
     ``delta``: the call delta used to size the sleeve (notional = equity sold / delta). ``None`` (default) uses the model delta of
