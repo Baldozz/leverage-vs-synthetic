@@ -142,7 +142,7 @@ def fmt_row(sm: pd.DataFrame, row: str, sid: str, info: fsc.ScenarioInfo) -> str
         if sid not in fsc.LEVERED:
             return "—"
         d = sm.loc["loan repaid on", sid]
-        return f"{d:%d %b %Y}" if pd.notna(d) else ("never" if sid == "2" and s.repay == "never" else "not yet")
+        return f"{d:%d %b %Y}" if pd.notna(d) else ("never" if (sid == "2" and s.repay == "never") or (sid == "4" and s.repay_calls == "never") else "not yet")
     if row == "calls expired":
         if sid in ("1", "2"):
             return "—"
@@ -298,11 +298,11 @@ st.caption(f"""**The five scenarios**
 - **1 Long the market**: all in SPX.
 - **2 Levered long**: {(1 + s.loan_frac) * cap:,.1f} m in SPX on the {lC:,.1f} m loan, drawn on the start day.
 - **3 {fsc.LABELS['3']}**: all in SPX; the sleeve's premium sold out of it slot by slot ({i3.premium_build / M:,.0f} m at the first start).
-- **4 {fsc.LABELS['4']}**: all in SPX; the same sleeve bought with a loan drawn slot by slot ({i4.loan0 / M:,.0f} m at the first start), repaid slot by slot at the first expiries.
+- **4 {fsc.LABELS['4']}**: all in SPX; the same sleeve bought with a loan drawn slot by slot ({i4.loan0 / M:,.0f} m at the first start), """ + ("repaid slot by slot at the first expiries." if s.repay_calls == "expiry" else "rolled up to the end.") + """
 - **5 All in calls**: the SPX rotated into calls slot by slot, all of it ({i5.premium_build / M:,.0f} m of premium at the first start).""")
 st.caption(f"""**At a slot's expiry** (payoff in cash, tax where due)
 - **3**: {refill}.
-- **4**: the slot's share of the loan repaid from the proceeds (SPX sold for a shortfall); the rest in new calls; no new loan.
+- **4**: """ + ("the slot's share of the loan repaid from the proceeds (SPX sold for a shortfall); the rest in new calls; no new loan." if s.repay_calls == "expiry" else "the loan stays (rolled up to the end); the whole after-tax payoff into new calls; no new loan.") + """
 - **5**: the whole payoff into a new call; a worthless slot lapses; the last one lapsing with nothing left ends the scenario (✕ wiped out).""")
 departures = [f"- The sleeve is built over {s.build_steps} {unit} slots, the money waiting in SPX; the note buys everything on the start day (one strike, one expiry). Set *Steps* to 1 for the note's version."
               if s.build_steps > 1 else None,
@@ -312,6 +312,8 @@ departures = [f"- The sleeve is built over {s.build_steps} {unit} slots, the mon
               if s.rebalance == "portfolio" and s.sizing == "premium" else None,
               (f"- The sleeve is sized by exposure ({s.exposure_frac:.0%} of the capital in delta × notional, ≈ {i3.premium_build / M:,.0f} m of premium); the note fixes the premium at 25 % of the capital (162.5 m, 1,120 m of notional)."
                if s.sizing == "exposure" else None),
+              "- Scenario 4's loan is never repaid (rolled up to the end); the note pays it off. Set *Scenario 4: the loan is* to repaid for the note's version."
+              if s.repay_calls == "never" else None,
               "- Exposure is counted at the model's delta (≈ 44–53 % for a 5-year at-the-money call, with the rate of the day); the note assumes 50 %."]
 st.caption("**Departures from the investor's note**\n" + "\n".join(d for d in departures if d))
 st.caption("""**Reading the charts**

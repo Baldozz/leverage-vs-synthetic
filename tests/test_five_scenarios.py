@@ -347,6 +347,16 @@ def test_scenario_3_refills_a_paying_slot_and_scenario_4_repays_slot_by_slot(tmp
     assert i4.expiries[2].loan_repaid == 0.0 and i4.expiries[2].new_premium == pytest.approx(i4.expiries[2].payoff - i4.expiries[2].tax)   # the second cycle rolls the after-tax proceeds
     for sid in SCENARIOS:
         _identity(paths[sid])
+    # the loan rolled up to the end: never repaid, every after-tax payoff into new calls, the LTV never zero, the SPX never sold
+    q, qi = simulate_scenarios("2010-01-04", "2012-07-13", tenor=1.0, build_steps=2, sizing="premium", repay_calls="never", file=f)
+    p4n, i4n = q["4"], qi["4"]
+    loan_n = _accrued(p4n, 0.25 * C / 2, 0.055) + np.concatenate([np.zeros(5), _accrued(p4n.iloc[5:], 0.25 * C / 2, 0.055)])   # the two slots' loans, each from its own day
+    assert np.allclose(p4n["loan"].to_numpy(), loan_n, rtol=1e-12) and i4n.loan_repaid_on is None and (p4n["ltv"] > 0.0).all() and (p4n["spx_traded"] == 0.0).all()
+    assert all(e.loan_repaid == 0.0 and e.new_premium == pytest.approx(e.payoff - e.tax) for e in i4n.expiries) and len(i4n.expiries) == 4
+    assert np.allclose(p4n["E"].to_numpy(), C * spx[: len(p4n)] / 100.0, rtol=1e-12) and summary(q, qi).loc["loan today", "4"] == pytest.approx(loan_n[-1])
+    _identity(p4n)
+    with pytest.raises(ValueError):
+        simulate_scenarios("2010-01-04", "2012-07-13", tenor=1.0, repay_calls="later", file=f)
 
 
 def test_scenario_5_lapses_slot_by_slot(tmp_path: Path) -> None:

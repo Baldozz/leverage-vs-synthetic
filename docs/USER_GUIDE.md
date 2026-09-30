@@ -47,8 +47,8 @@ of the run (numbers and dates only). Every explanation — the scenarios, the sl
 the notes at the foot of the page. The sidebar holds the capital, the loan share, the call sleeve (sized by exposure or by premium, the
 %, built weekly or monthly in how many steps), the rate, the premium (fixed, or the market's vol of the day), the tax and whether scenario 5 is
 taxed too, the tenor; under *Advanced* the lending values and the call level, the withholding tax, and the two readings of the investor's note
-(scenario 2's loan repaid after one tenor or never; scenario 3 refilling a slot from the whole portfolio or only from the proceeds — the latter
-under premium sizing only).
+(scenario 2's loan repaid after one tenor or never; scenario 4's loan repaid slot by slot from the call proceeds or never; scenario 3 refilling a
+slot from the whole portfolio or only from the proceeds — the latter under premium sizing only).
 *Download every start's daily paths as CSV* writes every (start, scenario, day). Nothing is sold on a margin call: it is flagged, not acted on.
 
 ## Supporting apps (strategy simulator, kept for reference)
