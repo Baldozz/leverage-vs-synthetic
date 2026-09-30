@@ -11,8 +11,9 @@ replacements cut) stay in the sidebar. Historical data only
 app `app/historical_app.py` (pages 1 and 2), formulas `docs/METHODOLOGY.md` §9, choices `docs/ASSUMPTIONS.md` 19p. **Page 3 ("Five scenarios") is a
 separate, simplified exercise, kept apart from the above in every document** (README Part 2, USER_GUIDE own section, METHODOLOGY §10, ASSUMPTIONS 40,
 LIMITATIONS 18, its own navigation group in the app): `app/views/five_scenarios.py`, engine `src/fosim/analytics/five_scenarios.py` — the investor's
-five ways to hold 650 m from three start dates (long, levered long, 75/25 with calls, long + calls on a loan, all in calls; fixed 14.5 % premium, 24 % tax
-at expiry, margin calls flagged), none of Part 1's rules, sharing only the data and the pricer. Keep the two parts separate when editing docs.
+five ways to hold 650 m from five start dates (data start, dot-com peak and bottom, GFC peak and bottom) (long, levered long, SPX + a call sleeve, long + the sleeve on a loan, all in calls; the sleeve sized by
+premium — 25 % of the capital, the note's 162.5 m — or by exposure as an option, built in 52 weekly slots, the money waiting in SPX; fixed 14.5 % premium, 24 % tax
+at every call expiry, margin calls flagged), none of Part 1's rules, sharing only the data and the pricer. Keep the two parts separate when editing docs.
 The earlier Monte Carlo simulator (strategies A/B/C/D, `SPEC.md`, `docs/PLAN.md`, `app/streamlit_app.py`) is kept
 for reference and its tests still run.
 

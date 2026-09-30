@@ -61,17 +61,23 @@ trip, Black-76 equivalence for q = r).
 **Not part of the decision above.** This page answers a different, simpler question an investor put at the meeting of 29 September 2026: a capital of
 650 m, five ways to hold it, each on one historical path from a start date to today. There is no 1 bn portfolio, no 250 m loan, no delta-sized
 rotation, no roll matching and no band: every rule is the investor's own, kept as simple as written, so that the page can be read without Part 1.
-The five ways, from three start dates (the data start, the dot-com peak of 24 Mar 2000, the GFC bottom of 9 Mar 2009; another can be added):
+The five ways, from five start dates (the data start, the dot-com peak of 24 Mar 2000 and bottom of 9 Oct 2002, the GFC peak of 9 Oct 2007 and bottom of 9 Mar 2009; another can be added):
 **1** long the market; **2** levered long (812.5 m in SPX − a 162.5 m loan at a flat 5.5 %, interest capitalised, repaid from SPX after 5 years);
-**3** 75 % SPX + 25 % of the capital in rolling 5-year ATM calls on SPXFP (every call 14.5 % of notional; at expiry 24 % of the profit paid as tax, then the whole portfolio back to 75/25);
-**4** long the market + 25 % of premium bought on a 162.5 m loan (at expiry the tax, the loan repaid from the proceeds, the rest in new calls, no
-new loan); **5** everything in calls (the payoff rolled untaxed, a worthless expiry ends it). The page (`app/views/five_scenarios.py`) shows an overview table (NAV today and the
-annualised return per start and scenario, margin calls and wipe-outs flagged), then per start a chart of the five NAVs with the call expiries, the
-loan repayment and any margin call marked, the LTV of the two levered scenarios against the call level underneath, and a table of the run (NAV,
-return, low, margin call, loan, calls, premiums, payoffs, tax, interest, SPX traded, holdings); a CSV of every daily path. Its own sidebar: capital, call
-and loan shares, the rate (flat or base + spread), the premium (fixed or the market's), the tax and whom it applies to, the tenor, and under
-Advanced the lending values, the call level, the withholding tax and the two readings of the note (scenario 2's repayment, scenario 3's
-rebalance). Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
+**3** SPX + a sleeve of rolling 5-year ATM calls on SPXFP; **4** long the market + the same sleeve bought on a loan; **5** everything in calls.
+**The sleeve** (decisions of 30 Sep 2026): sized by *premium* — 25 % of the capital, the note's 162.5 m on 1,120 m of notional, every call costing
+14.5 % of notional — or, as an option, by *exposure* (a % of the capital in SPX-equivalent, the model delta × the notional, the premium following);
+*built over time* in 52 weekly slots (monthly, or 1 shot, up to two years), the money waiting
+in SPX and rotated slot by slot (scenario 4 draws the loan slot by slot, scenario 5 sells an equal share of its SPX at each step); each slot has its
+own expiry. At a slot's expiry 24 % of the profit is paid as tax (every call scenario alike), then: **3** refills the slot to its share of the whole
+portfolio, SPX sold or bought for the difference; **4** repays the slot's share of the loan from the proceeds (SPX sold for any shortfall) and puts
+the rest in new calls, no new loan; **5** rolls the slot's after-tax payoff, a worthless slot lapses and the last one lapsing with nothing left ends it.
+The page lists its departures from the note in its notes (the build over a year, scenario 5 taxed, scenario 3 refilled from the whole portfolio, the model's delta). It (`app/views/five_scenarios.py`) shows an overview table (NAV today and the annualised return per start and scenario, margin calls and
+wipe-outs flagged), then per start a chart with three rows — the five NAVs with the slot expiries, the loan repayment, the build band and any
+margin call marked; the SPX-equivalent exposure of each scenario (SPX + the calls' dollar delta); the LTV of the two levered scenarios against the
+call level — and a short table of the run (NAV and return, low, exposure today, margin call, loan repaid, calls expired, premiums, payoffs, tax,
+interest, holdings); a CSV of every daily path; every explanation in the notes at the foot of the page. Its own sidebar: capital, loan share, the sleeve (sized by exposure or premium, the %, the build's
+step and count), the rate (flat or base + spread), the premium (fixed or the market's), the tax and whom it applies to, the tenor, and under
+Advanced the lending values, the call level, the withholding tax and the two readings of the note (scenario 2's repayment, scenario 3's refill). Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
 `summary`, `paths_table`), tests `tests/test_five_scenarios.py` and the page test in `tests/test_app.py`, formulas `docs/METHODOLOGY.md` §10,
 choices `docs/ASSUMPTIONS.md` 40, limits `docs/LIMITATIONS.md` 18. Everything in Part 1 (engine, pages, tests, docs) is untouched by it.
 

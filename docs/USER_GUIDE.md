@@ -29,18 +29,26 @@ Caveats shown on the page: strikes are daily so consecutive observations overlap
 ## The five scenarios — a separate, simplified exercise (page 3)
 **Independent of pages 1 and 2**: a different portfolio (a capital, default 650 m, not the 1 bn with the 250 m loan), the investor's own rules kept as simple as written (a fixed 14.5 % premium, a flat 5.5 % loan, 24 % tax at expiry; no delta-sized rotation, no roll matching, no band), its own sidebar and engine; only the market data, the pricer, the call tenor and the withholding tax are shared.
 The investor's five ways to hold the capital (default 650 m), each held from a start date to today: **1** long the market; **2** levered long
-(the capital plus a loan of 25 % of it in SPX, at a flat 5.5 %, interest capitalised, the loan repaid from SPX after one tenor); **3** 75 % SPX +
-25 % of the capital in rolling 5-year ATM calls on SPXFP, every call costing 14.5 % of notional — at expiry 24 % of the profit is paid as tax and
-the whole portfolio goes back to 75/25; **4** long the market + 25 % of premium bought with a loan — at expiry the tax, the loan repaid from the
-proceeds (SPX sold for any shortfall), the rest in new calls, no new loan; **5** everything in calls, the payoff rolled untaxed, a worthless
-expiry ends it. Pick the start dates at the top (the data start, the dot-com peak and the GFC bottom by default; *Add another start date* for a
-fourth; *Log scale* when the all-in-calls portfolio dwarfs the others). The overview table gives the NAV today and the annualised return per start
+(the capital plus a loan of 25 % of it in SPX, at a flat 5.5 %, interest capitalised, the loan repaid from SPX after one tenor); **3** SPX + a
+sleeve of rolling 5-year ATM calls on SPXFP, every call costing 14.5 % of notional; **4** long the market + the same sleeve bought with a loan;
+**5** everything in calls. The sleeve is *sized by premium* by default — 25 % of the capital, the note's 162.5 m on 1,120 m of notional — or by
+*exposure* (a % of the capital in SPX-equivalent, the model delta × the notional, the premium following); it is *built* in
+52 weekly slots by default (weekly or monthly, 1 = all on the start day, up to two years), the money waiting in SPX and rotated slot by slot
+(scenario 4 draws the loan slot by slot; scenario 5 sells an equal share of its SPX at each step), and each slot has its own expiry. At a slot's
+expiry 24 % of the profit is paid as tax (every call scenario alike; the box *Tax scenario 5 too* unticked gives the note's literal reading); then **3** refills the slot to its share of the whole portfolio, SPX sold or bought for the
+difference; **4** repays the slot's share of the loan from the proceeds (SPX sold for any shortfall), the rest in new calls, no new loan;
+**5** rolls the slot's after-tax payoff, a worthless slot lapses, the last one lapsing with nothing left ends it. Pick the start dates at the top (the data start, the dot-com peak and bottom, the GFC peak and bottom by default; *Add another start date* for a
+sixth; *Log scale*, on by default since the all-in-calls portfolio dwarfs the others — untick for a linear axis). The overview table gives the NAV today and the annualised return per start
 and scenario, with ⚠ where a levered scenario was margin-called (the loan above 90 % of the lending value) and *wiped out* where scenario 5 lost
-its call; then, per start, the chart of the five NAVs (hollow circles = call expiries with the payoff, tax and the new call on hover; the triangle =
-scenario 2's loan repaid; a red ✕, a label and shaded days = a margin call), the LTV of scenarios 2 and 4 against the call level underneath, and a
-table of the run. The sidebar holds the capital, the call and loan shares, the rate, the premium (fixed, or the market's vol of the day), the tax
-and whether scenario 5 is taxed too, the tenor; under *Advanced* the lending values and the call level, the withholding tax, and the two readings
-of the investor's note (scenario 2's loan repaid after one tenor or never; scenario 3 rebalancing the whole portfolio or only the proceeds).
+its last call; then, per start, a chart with three rows: the five NAVs (hollow circles = slot expiries with the payoff, tax and the new call on
+hover; the triangle = scenario 2's loan repaid; the grey band = the build; a red ✕, a label and shaded days = a margin call), the SPX-equivalent
+exposure of each scenario (SPX held + the dollar delta of its calls), and the LTV of scenarios 2 and 4 against the call level; then a short table
+of the run (numbers and dates only). Every explanation — the scenarios, the sleeve, the rules at expiry, the departures from the investor's note, how to read the charts — is in
+the notes at the foot of the page. The sidebar holds the capital, the loan share, the call sleeve (sized by exposure or by premium, the
+%, built weekly or monthly in how many steps), the rate, the premium (fixed, or the market's vol of the day), the tax and whether scenario 5 is
+taxed too, the tenor; under *Advanced* the lending values and the call level, the withholding tax, and the two readings of the investor's note
+(scenario 2's loan repaid after one tenor or never; scenario 3 refilling a slot from the whole portfolio or only from the proceeds — the latter
+under premium sizing only).
 *Download every start's daily paths as CSV* writes every (start, scenario, day). Nothing is sold on a margin call: it is flagged, not acted on.
 
 ## Supporting apps (strategy simulator, kept for reference)
