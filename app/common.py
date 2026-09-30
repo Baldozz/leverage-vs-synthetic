@@ -204,7 +204,7 @@ class ScenarioSetup:
 _RATE_MODE = {"fixed rate": "fixed", "3-month base rate + spread of the day": "base"}
 _PREM_MODE = {"fixed % of notional": "fixed", "market vol of the day": "market"}
 _REPAY = {"repaid from SPX after one tenor": "tenor", "rolled up to the end": "never"}
-_REPAY4 = {"repaid slot by slot from the call proceeds": "expiry", "rolled up to the end": "never"}
+_REPAY4 = {"repaid from the call proceeds, only the surplus in new calls": "surplus", "repaid from the call proceeds, the slot refilled from SPX": "refill_spx", "never repaid: the slot refilled on a new loan": "reborrow"}
 _REBAL = {"the whole portfolio, SPX sold or bought": "portfolio", "the after-tax proceeds only, SPX untouched": "proceeds"}
 _SIZING = {"premium: % of the capital": "premium", "exposure: % of the capital in SPX-equivalent (delta × notional)": "exposure"}
 _BUILD_UNIT = {"weekly": "week", "monthly": "month"}
@@ -213,7 +213,7 @@ _BUILD_UNIT = {"weekly": "week", "monthly": "month"}
 def scenarios_sidebar() -> ScenarioSetup:
     """Page 3's sidebar: the investor's five scenarios. Drawn by the entry script when that page is shown; read back with ``scenario_setup``."""
     for k, v in (("f_capital", 650.0), ("f_call_pct", 25.0), ("f_loan_pct", 25.0), ("f_rate_mode", "fixed rate"), ("f_rate", 5.5), ("f_spread", 75.0), ("f_prem_mode", "fixed % of notional"),
-                 ("f_prem", 14.5), ("f_tax", 24.0), ("f_tax5", True), ("f_lv", 75.0), ("f_lv_calls", 0.0), ("f_margin", 90.0), ("f_repay", "repaid from SPX after one tenor"), ("f_repay4", "repaid slot by slot from the call proceeds"),
+                 ("f_prem", 14.5), ("f_tax", 24.0), ("f_lv", 75.0), ("f_lv_calls", 0.0), ("f_margin", 90.0), ("f_repay", "repaid from SPX after one tenor"), ("f_repay4", next(iter(_REPAY4))),
                  ("f_rebalance", "the whole portfolio, SPX sold or bought"), ("f_sizing", next(iter(_SIZING))), ("f_exp_pct", 86.0), ("f_build_unit", "weekly"), ("f_build_steps", 52)):
         _restore(k, v)
     with st.sidebar:
@@ -240,20 +240,19 @@ def scenarios_sidebar() -> ScenarioSetup:
         st.radio("Premium", list(_PREM_MODE), key="f_prem_mode", help="Fixed: every call costs this share of its notional, whatever the vol of the day, and is marked at the vol that share implies on its purchase day. Market: priced and marked at the tenor's implied vol of the day (Assumptions 19l).")
         fixed_prem = str(st.session_state["f_prem_mode"]) == "fixed % of notional"
         st.number_input("Premium (% of notional)", 1.0, 60.0, step=0.5, key="f_prem", disabled=not fixed_prem)
-        st.number_input("Tax on the profit at expiry (%)", 0.0, 90.0, step=1.0, key="f_tax", help="Taken off payoff − premium when positive, at every call expiry; no loss carry-forward; no tax on the SPX.")
-        st.checkbox("Tax scenario 5 too", key="f_tax5", help="On by default so that the tax applies to every call scenario alike; the investor's note, read literally, taxes scenarios 3 and 4 only.")
+        st.number_input("Tax on the profit at expiry (%)", 0.0, 90.0, step=1.0, key="f_tax", help="Taken off payoff − premium when positive, at every call expiry, scenarios 3, 4 and 5 alike; no loss carry-forward; no tax on the SPX.")
         with st.expander("Advanced"):
             _wht_widget("On the dividends of the SPX held. Common to every page.")
             st.number_input("Lending value of the SPX (%)", 1.0, 100.0, step=5.0, key="f_lv", help="The most the bank lends against the SPX. LTV = loan ÷ lending value.")
             st.number_input("Lending value of the calls (%)", 0.0, 100.0, step=5.0, key="f_lv_calls")
             st.number_input("Margin call at LTV (%)", 1.0, 100.0, step=5.0, key="f_margin", help="The bank calls when the loan exceeds this share of the lending value (PLACEHOLDER 90 %, as on page 1). Flagged on the charts; no forced sale is modelled.")
             st.radio("Scenario 2: the loan is", list(_REPAY), key="f_repay", help="The investor's note: 'the loan rolling up, then paid off' — repaid from SPX on the day the first call of the other scenarios expires (user's reading, 2026-09-29), or never (the NAV is net of it throughout).")
-            st.radio("Scenario 4: the loan is", list(_REPAY4), key="f_repay4", help="The investor's note: 'the loan rolling up, then paid off' — each build slot's share repaid from its call's proceeds at expiry, SPX sold for any shortfall (user's reading, 2026-09-29); or never: the loan rolls up to the end, every payoff goes into new calls, the NAV is net of the loan throughout and the LTV keeps running.")
+            st.radio("Scenario 4 at a slot's expiry, the loan is", list(_REPAY4), key="f_repay4", help="Surplus (the note's 'rolling up, then paid off'): the slot's share of the loan is repaid from the call's proceeds, SPX sold for any shortfall, and only the cash left buys a new call — a worthless call ends its slot. Refilled from SPX: the same repayment, then the slot is refilled to its share of the portfolio by selling SPX; the sleeve lives on, unlevered. Never repaid: the after-tax proceeds buy SPX and every replacement call is bought on a new loan; the loan runs to the end and the LTV with it.")
             if by_exposure:
                 st.session_state["f_rebalance"] = next(iter(_REBAL))
             st.radio("Scenario 3 at a slot's expiry, refill from:", list(_REBAL), key="f_rebalance", disabled=by_exposure, help="The user's reading (2026-09-29): the slot is refilled to its share of the whole portfolio, SPX sold when the call expired worthless and bought when it paid. The literal alternative splits only the after-tax proceeds (premium sizing only).")
         st.caption("Historical data only, September 1997 to today; every start is held to the last data day.")
-    _remember("f_capital", "f_call_pct", "f_loan_pct", "f_rate_mode", "f_rate", "f_spread", "s_tenor", "f_prem_mode", "f_prem", "f_tax", "f_tax5", "s_wht", "f_lv", "f_lv_calls", "f_margin", "f_repay", "f_repay4", "f_rebalance",
+    _remember("f_capital", "f_call_pct", "f_loan_pct", "f_rate_mode", "f_rate", "f_spread", "s_tenor", "f_prem_mode", "f_prem", "f_tax", "s_wht", "f_lv", "f_lv_calls", "f_margin", "f_repay", "f_repay4", "f_rebalance",
               "f_sizing", "f_exp_pct", "f_build_unit", "f_build_steps")
     return scenario_setup()
 
@@ -264,7 +263,7 @@ def scenario_setup() -> ScenarioSetup:
     return ScenarioSetup(float(s["f_capital"]) * M, float(s["f_call_pct"]) / 100.0, float(s["f_loan_pct"]) / 100.0,
                          float(s["f_rate"]) / 100.0 if _RATE_MODE[str(s["f_rate_mode"])] == "fixed" else None, float(s["f_spread"]) / 1e4,
                          float(s["f_prem"]) / 100.0 if _PREM_MODE[str(s["f_prem_mode"])] == "fixed" else None, float(s["f_tax"]) / 100.0,
-                         ("3", "4", "5") if bool(s["f_tax5"]) else ("3", "4"), float(s["s_tenor"]), float(s["s_wht"]) / 100.0, float(s["f_lv"]) / 100.0, float(s["f_lv_calls"]) / 100.0,
+                         ("3", "4", "5"), float(s["s_tenor"]), float(s["s_wht"]) / 100.0, float(s["f_lv"]) / 100.0, float(s["f_lv_calls"]) / 100.0,
                          float(s["f_margin"]) / 100.0, _REPAY[str(s["f_repay"])], _REPAY4[str(s["f_repay4"])], _REBAL[str(s["f_rebalance"])],
                          _SIZING[str(s["f_sizing"])], float(s["f_exp_pct"]) / 100.0, int(s["f_build_steps"]), _BUILD_UNIT[str(s["f_build_unit"])])
 

@@ -346,8 +346,8 @@ def test_five_scenarios_page() -> None:
     assert [w.label for w in at.sidebar.number_input] == ["Capital (USD m)", "Loan (% of the capital)", "Exposure (% of the capital)", "Premium (% of the capital)", "Steps (1 = all on the start day)",
                                                           "Flat rate (%)", "Spread over the base rate (bp)", "Premium (% of notional)",
                                                           "Tax on the profit at expiry (%)", "Dividend withholding tax (%)", "Lending value of the SPX (%)", "Lending value of the calls (%)", "Margin call at LTV (%)"]
-    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Interest at", "Premium", "Scenario 2: the loan is", "Scenario 4: the loan is", "Scenario 3 at a slot's expiry, refill from:"] and [c.label for c in at.sidebar.checkbox] == ["Tax scenario 5 too"]
-    assert at.radio(key="f_repay4").value == "repaid slot by slot from the call proceeds"
+    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Interest at", "Premium", "Scenario 2: the loan is", "Scenario 4 at a slot's expiry, the loan is", "Scenario 3 at a slot's expiry, refill from:"] and [c.label for c in at.sidebar.checkbox] == []
+    assert at.radio(key="f_repay4").value == "repaid from the call proceeds, only the surplus in new calls"
     assert [w.label for w in at.sidebar.selectbox] == ["Call tenor (years)"] and at.number_input(key="f_capital").value == 650.0 and at.number_input(key="f_prem").value == 14.5 and at.number_input(key="f_tax").value == 24.0
     assert at.number_input(key="f_spread").proto.disabled and not at.number_input(key="f_rate").proto.disabled   # the flat rate is the default; the spread only with the base rate
     # the sleeve sized by premium (25 % of the capital, the note) and built in 52 weekly slots by default; the exposure input greyed out, scenario 3's refill radio enabled

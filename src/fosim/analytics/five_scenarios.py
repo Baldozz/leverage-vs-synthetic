@@ -10,8 +10,9 @@ its own expiry and is rolled on its own slot.
     2  Levered long:             (1 + ℓ)·C in SPX, a loan ℓ·C at a flat rate (5.5 %), interest capitalised, repaid from SPX after one tenor
     3  SPX + calls:              C in SPX, each step sells one slot of premium for calls; at a tranche's expiry tax on the profit, then the
                                  slot refilled to its share of the portfolio (X·V/N of exposure, or κ·V/N of premium), SPX absorbing the rest
-    4  Long + calls on a loan:   C in SPX, each step draws one slot of premium as a loan; at a tranche's expiry tax, the slot's share of the
-                                 loan repaid from the proceeds (SPX sold for a shortfall) — or the loan rolled up to the end — the rest in new calls, no new loan
+    4  Long + calls on a loan:   C in SPX, each step draws one slot of premium as a loan; at a tranche's expiry tax, then the slot's share of the
+                                 loan repaid from the proceeds (SPX sold for a shortfall) and only the surplus in new calls — or repaid and the slot
+                                 refilled from SPX — or never repaid, the slot refilled on a new loan
     5  All in calls:             C in SPX rotated into calls step by step; each tranche rolls its own after-tax payoff; a
                                  worthless tranche lapses, the last one lapsing with nothing left ends it
 
@@ -46,7 +47,7 @@ SCENARIOS = ("1", "2", "3", "4", "5")
 LABELS = {"1": "Long the market", "2": "Levered long", "3": "SPX + calls", "4": "Long + calls on a loan", "5": "All in calls"}
 LEVERED = ("2", "4")
 REPAY = ("tenor", "never")             # scenario 2: the loan repaid from SPX after one tenor, or rolled up to the end
-REPAY_CALLS = ("expiry", "never")      # scenario 4: the loan repaid slot by slot from the call proceeds at expiry, or rolled up to the end
+REPAY_CALLS = ("surplus", "refill_spx", "reborrow")   # scenario 4 at a slot's expiry: the loan share repaid and only the surplus in new calls; repaid and the slot refilled from SPX; never repaid, the slot refilled on a new loan
 REBALANCE = ("portfolio", "proceeds")  # scenario 3 at expiry: the slot refilled to its share of the portfolio, or the after-tax proceeds split (1 − κ)/κ
 SIZING = ("exposure", "premium")       # the call sleeve: X of the capital in SPX-equivalent exposure, or κ of the capital in premium
 BUILD_UNITS = ("week", "month")        # the build steps 7 calendar days or one calendar month apart
@@ -67,6 +68,7 @@ class Expiry:
     worthless: bool
     slot: int = 0            # the build step this tranche descends from (0-based)
     wiped_out: bool = False  # scenario 5: nothing left to reinvest anywhere
+    loan_drawn: float = 0.0  # scenario 4 under "reborrow": the new call bought on a new loan
 
 
 @dataclass(frozen=True)
@@ -102,7 +104,7 @@ def simulate_scenarios(
     start: str | pd.Timestamp, end: str | pd.Timestamp, capital: float = 650e6, loan_frac: float = 0.25, call_frac: float = 0.25,
     loan_rate: float | None = 0.055, spread: float = 0.0075, premium: float | None = 0.145, tenor: float = 5.0,
     tax_rate: float = 0.24, tax_on: tuple[str, ...] = ("3", "4", "5"), lv_equity: float = 0.75, lv_calls: float = 0.0, lv_cash: float = 0.90,
-    margin_call: float = 0.90, wht: float = 0.15, repay: str = "tenor", repay_calls: str = "expiry", rebalance: str = "portfolio",
+    margin_call: float = 0.90, wht: float = 0.15, repay: str = "tenor", repay_calls: str = "surplus", rebalance: str = "portfolio",
     sizing: str = "premium", exposure_frac: float = 0.86, build_steps: int = 52, build_unit: str = "week", file: Path | str | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, ScenarioInfo]]:
     """Daily path of the five scenarios from ``start`` to ``end`` (nearest trading days). See the module docstring.
@@ -110,9 +112,11 @@ def simulate_scenarios(
     ``loan_rate``: flat annual rate of the loans (0.055 default); ``None`` uses the 3-month base rate of the day + ``spread``.
     ``premium``: the call premium as a fraction of notional (0.145 default), the calls marked at the vol it implies on the purchase day;
     ``None`` prices and marks at the market's implied vol of the day. ``tax_on``: the scenarios whose call profits are taxed at expiry (all three call scenarios by default).
-    ``repay``: scenario 2's loan, ``"tenor"`` (sold SPX on the trading day nearest t₀ + tenor) or ``"never"``. ``repay_calls``: scenario 4's
-    loan, ``"expiry"`` (each build slot's share repaid from its proceeds at expiry, SPX sold for a shortfall) or ``"never"`` (rolled up to the
-    end, every expiry's proceeds into new calls). ``rebalance``: scenario 3
+    ``repay``: scenario 2's loan, ``"tenor"`` (sold SPX on the trading day nearest t₀ + tenor) or ``"never"``. ``repay_calls``: scenario 4 at a
+    slot's expiry — ``"surplus"`` (each build slot's share of the loan repaid from its proceeds, SPX sold for a shortfall; only the cash left
+    buys a new call, so a worthless call ends its slot), ``"refill_spx"`` (the same repayment, then the slot refilled to its share of the
+    portfolio from the cash and SPX sold for the rest, no new loan) or ``"reborrow"`` (never repaid: the after-tax proceeds buy SPX and the
+    slot's replacement is bought on a new loan, so the loan runs to the end). ``rebalance``: scenario 3
     at a tranche's expiry, ``"portfolio"`` (the slot refilled to its share of the whole portfolio, SPX sold or bought for the difference) or
     ``"proceeds"`` (premium sizing only: the after-tax proceeds split (1 − κ)/κ, the SPX untouched). ``sizing``: ``"premium"`` (default) — the sleeve
     is ``call_frac`` of the capital in premium — or ``"exposure"`` — ``exposure_frac`` of the capital in SPX-equivalent (delta × notional),
@@ -298,7 +302,8 @@ def simulate_scenarios(
                 cash += payoff - tax
                 tax_day[k] += tax
                 repaid = bought = new_prem = new_notional = 0.0
-                if sid == "4" and loan > 0.0 and t.first_cycle and repay_calls == "expiry":   # this slot's share of the loan, from the proceeds, then from SPX sold
+                drawn = 0.0
+                if sid == "4" and loan > 0.0 and t.first_cycle and repay_calls != "reborrow":   # this slot's share of the loan, from the proceeds, then from SPX sold
                     share = loan / first_cycle_alive
                     repaid = min(share, cash)
                     cash -= repaid
@@ -326,6 +331,22 @@ def simulate_scenarios(
                         eq_units += bought / tr[k]
                         e_now = eq_units * tr[k]
                         cash -= bought + new_prem
+                    elif sid == "4" and repay_calls == "refill_spx":   # the slot refilled to its share of the portfolio, from the cash and then SPX sold; no new loan
+                        total = e_now + marks[k] + prem_today + cash - loan
+                        new_prem = max(min(slot_premium(k, total), cash + e_now), 0.0)
+                        bought = cash - new_prem
+                        eq_units += bought / tr[k]
+                        e_now = eq_units * tr[k]
+                        cash -= bought + new_prem
+                    elif sid == "4" and repay_calls == "reborrow":     # the after-tax proceeds into SPX, the slot refilled on a new loan
+                        total = e_now + marks[k] + prem_today + cash - loan
+                        bought = cash
+                        eq_units += bought / tr[k]
+                        e_now = eq_units * tr[k]
+                        cash = 0.0
+                        new_prem = max(slot_premium(k, total), 0.0)
+                        drawn = new_prem
+                        loan += drawn
                     elif sid in ("4", "5") and cash > 0.0:   # the rest in new calls (no new loan)
                         new_prem, cash = cash, 0.0
                     if new_prem > TOL:
@@ -333,11 +354,15 @@ def simulate_scenarios(
                         tranches.append(nt)
                         prem_today += new_prem
                         new_notional = nt.units * nt.strike
-                    elif new_prem > 0.0:                     # dust: kept as cash rather than a call of a few cents
-                        cash += new_prem
+                    elif new_prem > 0.0:                     # dust: kept as cash rather than a call of a few cents (a dust loan is undone)
+                        if drawn > 0.0:
+                            loan -= drawn
+                            drawn = 0.0
+                        else:
+                            cash += new_prem
                         new_prem = 0.0
                 spx_traded[k] += bought
-                expiries.append(Expiry(date, t.strike, payoff, t.premium, tax, repaid, bought, new_prem, new_notional, payoff <= 0.0, t.slot))
+                expiries.append(Expiry(date, t.strike, payoff, t.premium, tax, repaid, bought, new_prem, new_notional, payoff <= 0.0, t.slot, loan_drawn=drawn))
             if buys_calls and k in build_index:
                 prem_today += build_step(k, build_index[k])
                 e_now = eq_units * tr[k]

@@ -76,8 +76,8 @@ wipe-outs flagged), then per start a chart with three rows — the five NAVs wit
 margin call marked; the SPX-equivalent exposure of each scenario (SPX + the calls' dollar delta); the LTV of the two levered scenarios against the
 call level — and a short table of the run (NAV and return, low, exposure today, margin call, loan repaid, calls expired, premiums, payoffs, tax,
 interest, holdings); a CSV of every daily path; every explanation in the notes at the foot of the page. Its own sidebar: capital, loan share, the sleeve (sized by exposure or premium, the %, the build's
-step and count), the rate (flat or base + spread), the premium (fixed or the market's), the tax and whom it applies to, the tenor, and under
-Advanced the lending values, the call level, the withholding tax and the readings of the note (scenario 2's and scenario 4's loan repaid or rolled up to the end, scenario 3's refill). Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
+step and count), the rate (flat or base + spread), the premium (fixed or the market's), the tax (every call scenario alike), the tenor, and under
+Advanced the lending values, the call level, the withholding tax and the readings of the note (scenario 2's loan repaid or rolled up; scenario 4 at a slot's expiry: the loan share repaid and only the surplus in new calls, repaid and the slot refilled from SPX, or never repaid with every new call on a new loan; scenario 3's refill). Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
 `summary`, `paths_table`), tests `tests/test_five_scenarios.py` and the page test in `tests/test_app.py`, formulas `docs/METHODOLOGY.md` §10,
 choices `docs/ASSUMPTIONS.md` 40, limits `docs/LIMITATIONS.md` 18. Everything in Part 1 (engine, pages, tests, docs) is untouched by it.
 
