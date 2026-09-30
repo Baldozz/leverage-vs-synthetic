@@ -1,5 +1,11 @@
 # Keep the loan, or rotate into calls — historical decision tool (USD only)
 
+Two separate parts share this repository. **Part 1** is the decision tool: keep a Lombard loan or rotate it into long-dated calls (pages 1 and 2 of the app).
+**Part 2** is a separate, simplified exercise added on 29 September 2026: an investor's five ways to hold a capital, on one historical path each (page 3).
+Nothing in Part 2 depends on Part 1 — different portfolio, its own engine, sidebar, assumptions and tests; only the market data and the Black–Scholes pricer are shared.
+
+## Part 1 — Keep the loan, or rotate into calls (pages 1 and 2)
+
 **The question.** An illustrative portfolio (default inputs, all editable): 1 bn in SPX with a 250 m Lombard loan on it (lending value 75 %, the bank calling at 90 % of it, SOFR + 75 bp, interest
 capitalised). Option 1, **Keep the loan**: nothing changes. Option 2, **Rotate into calls**: week by week sell SPX,
 buy long-dated (5-year default) ATM calls on SPXFP sized by the model delta so the SPX-equivalent exposure stays
@@ -11,8 +17,8 @@ stay in the sidebar: a new call on the same dollar delta (about twice the units)
 replaced (or lapsing), SPX sold delta-for-delta, a replacement nobody can fund cut to what can be. Historical
 data only, September 1997 to today.
 
-**The app** — `app/historical_app.py`, two pages, each with its own sidebar (the call tenor and the dividend withholding tax are
-common to both). Page 1's sidebar is the setup above, every number editable; the page runs only when its **Launch simulation** button is
+**The app** — `app/historical_app.py`; Part 1 is its first two pages, each with its own sidebar (the call tenor and the dividend withholding tax are
+common to every page). Page 1's sidebar is the setup above, every number editable; the page runs only when its **Launch simulation** button is
 pressed (sidebar, grid, start year and end day), and the button is greyed out until something changes (Advanced: withholding tax, what an expiring call is replaced on, the band check's frequency, width, haircut and what it buys, whether a
 worthless call is replaced, what a payoff left after a roll buys, the lending values of the calls and of the T-bills, the start-date grid); page 2's sidebar
 holds the backtest's inputs (premium, premium mode, strike window, cash leg):
@@ -46,9 +52,30 @@ implied vol and the 5-year Treasury of that day (q = r for an excess-return inde
 `docs/ASSUMPTIONS.md` 19l/19m for how the 5-year vol series is built from the 24-month Bloomberg series.
 Engine: `src/fosim/analytics/call_vs_cash.py`, tests `tests/test_call_vs_cash.py`, formulas `docs/METHODOLOGY.md` §8.
 
-The Black–Scholes pricer behind both pages is verified independently in `tests/test_bsm_reference.py` (Hull's
+The Black–Scholes pricer behind both pages (and behind Part 2) is verified independently in `tests/test_bsm_reference.py` (Hull's
 values, 2,000 random cases against a scipy reference, put–call parity, finite-difference Greeks, implied-vol round
 trip, Black-76 equivalence for q = r).
+
+## Part 2 — Five scenarios: a separate, simplified exercise (page 3)
+
+**Not part of the decision above.** This page answers a different, simpler question an investor put at the meeting of 29 September 2026: a capital of
+650 m, five ways to hold it, each on one historical path from a start date to today. There is no 1 bn portfolio, no 250 m loan, no delta-sized
+rotation, no roll matching and no band: every rule is the investor's own, kept as simple as written, so that the page can be read without Part 1.
+The five ways, from three start dates (the data start, the dot-com peak of 24 Mar 2000, the GFC bottom of 9 Mar 2009; another can be added):
+**1** long the market; **2** levered long (812.5 m in SPX − a 162.5 m loan at a flat 5.5 %, interest capitalised, repaid from SPX after 5 years);
+**3** 75 % SPX + 25 % of the capital in rolling 5-year ATM calls on SPXFP (every call 14.5 % of notional; at expiry 24 % of the profit paid as tax, then the whole portfolio back to 75/25);
+**4** long the market + 25 % of premium bought on a 162.5 m loan (at expiry the tax, the loan repaid from the proceeds, the rest in new calls, no
+new loan); **5** everything in calls (the payoff rolled untaxed, a worthless expiry ends it). The page (`app/views/five_scenarios.py`) shows an overview table (NAV today and the
+annualised return per start and scenario, margin calls and wipe-outs flagged), then per start a chart of the five NAVs with the call expiries, the
+loan repayment and any margin call marked, the LTV of the two levered scenarios against the call level underneath, and a table of the run (NAV,
+return, low, margin call, loan, calls, premiums, payoffs, tax, interest, SPX traded, holdings); a CSV of every daily path. Its own sidebar: capital, call
+and loan shares, the rate (flat or base + spread), the premium (fixed or the market's), the tax and whom it applies to, the tenor, and under
+Advanced the lending values, the call level, the withholding tax and the two readings of the note (scenario 2's repayment, scenario 3's
+rebalance). Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
+`summary`, `paths_table`), tests `tests/test_five_scenarios.py` and the page test in `tests/test_app.py`, formulas `docs/METHODOLOGY.md` §10,
+choices `docs/ASSUMPTIONS.md` 40, limits `docs/LIMITATIONS.md` 18. Everything in Part 1 (engine, pages, tests, docs) is untouched by it.
+
+## Common to both parts
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"

@@ -325,3 +325,101 @@ def test_strategy_replay_app_runs_1997_replay() -> None:
     assert len(at.tabs) == 3
     assert any("Done" in s.value for s in at.success)
     assert at.dataframe
+
+
+def test_five_scenarios_page() -> None:
+    """Page 3 (the investor's five scenarios): its own sidebar, the three named starts by default, the overview table and one chart + table per start,
+    the cells recomputed from the engine, the margin-call flag appearing exactly when the engine flags one, the log scale and the extra start."""
+    import json
+    import sys
+
+    sys.path.insert(0, str(APP.parents[1] / "src"))
+    import pandas as pd
+
+    from fosim.analytics.five_scenarios import LABELS, simulate_scenarios, summary
+    m = 1e6
+    names = [f"{sid} {lab}" for sid, lab in LABELS.items()]
+    at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=600)
+    at.switch_page("views/five_scenarios.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert [w.label for w in at.sidebar.number_input] == ["Capital (USD m)", "Call sleeve (% of the capital)", "Loan (% of the capital)", "Flat rate (%)", "Spread over the base rate (bp)", "Premium (% of notional)",
+                                                          "Tax on the profit at expiry (%)", "Dividend withholding tax (%)", "Lending value of the SPX (%)", "Lending value of the calls (%)", "Margin call at LTV (%)"]
+    assert [w.label for w in at.sidebar.radio] == ["Interest at", "Premium", "Scenario 2: the loan is", "Scenario 3 at expiry, back to 75/25:"] and [c.label for c in at.sidebar.checkbox] == ["Tax scenario 5 too"]
+    assert [w.label for w in at.sidebar.selectbox] == ["Call tenor (years)"] and at.number_input(key="f_capital").value == 650.0 and at.number_input(key="f_prem").value == 14.5 and at.number_input(key="f_tax").value == 24.0
+    assert at.number_input(key="f_spread").proto.disabled and not at.number_input(key="f_rate").proto.disabled   # the flat rate is the default; the spread only with the base rate
+    starts = ["data start — 09 Sep 1997, SPX 934", "dot-com peak — 24 Mar 2000, SPX 1,527", "GFC bottom — 09 Mar 2009, SPX 677"]
+    assert at.multiselect(key="f_starts").value == starts and len(at.get("plotly_chart")) == 3 and len(at.table) == 4
+    assert [h.value for h in at.subheader] == ["Start 09 Sep 1997 — data start, SPX 934", "Start 24 Mar 2000 — dot-com peak, SPX 1,527", "Start 09 Mar 2009 — GFC bottom, SPX 677"]
+    assert any(c.value.startswith("Capital 650 m, held to 14 Sep 2026. **1 Long the market**: 650 m in SPX. **2 Levered long**: 812.5 m in SPX − a 162.5 m loan at 5.50%") for c in at.caption)
+    assert any("notional 1,121 m, i.e. 560 m of delta at 50 %" in c.value and "notional 4,483 m, 2,241 m of delta" in c.value for c in at.caption)
+    # the overview: one row per start, one column per scenario, the cells recomputed from the engine
+    ov = at.table[0].value
+    assert list(ov.columns) == names and list(ov.index) == ["data start, 09 Sep 1997", "dot-com peak, 24 Mar 2000", "GFC bottom, 09 Mar 2009"]
+    runs = {d: simulate_scenarios(d, "2026-09-14") for d in ("1997-09-09", "2000-03-24", "2009-03-09")}
+    for i, d in enumerate(runs):
+        sm = summary(*runs[d])
+        for sid, name in zip(LABELS, names, strict=True):
+            assert ov.iloc[i][name].startswith(f"{sm.loc['NAV today', sid] / m:,.0f} m · {sm.loc['annualised return', sid]:+.1%} a year")
+    assert ov.iloc[0][names[4]].endswith("· wiped out 09 Sep 2002") and ov.iloc[1][names[4]].endswith("· wiped out 24 Mar 2005") and "wiped out" not in ov.iloc[2][names[4]]
+    assert not any("⚠" in v for v in ov.to_numpy().ravel())   # no margin call at the 90 % level on the defaults
+    # the GFC start's table against the engine
+    paths, infos = runs["2009-03-09"]
+    sm = summary(paths, infos)
+    t = at.table[3].value
+    assert list(t.columns) == names and list(t.index) == ["NAV today", "annualised return", "lowest NAV", "margin call", "loan repaid on", "calls expired", "premiums paid", "payoffs received", "tax paid", "interest paid", "SPX traded at expiries", "holdings today"]
+    for sid, name in zip(LABELS, names, strict=True):
+        assert t.loc["NAV today", name] == f"{sm.loc['NAV today', sid] / m:,.0f} m ({sm.loc['total return', sid]:+.0%} from the start)" and t.loc["annualised return", name] == f"{sm.loc['annualised return', sid]:+.1%}"
+        assert t.loc["lowest NAV", name] == f"{sm.loc['lowest NAV', sid] / m:,.0f} m on {sm.loc['lowest NAV on', sid]:%d %b %Y} ({sm.loc['max drawdown', sid]:+.0%} from the high)"
+    assert t.loc["margin call", names[0]] == "no loan" and t.loc["margin call", names[1]] == f"none (highest LTV {infos['2'].max_ltv:.0%})" and t.loc["margin call", names[3]] == f"none (highest LTV {infos['4'].max_ltv:.0%})"
+    assert t.loc["loan repaid on", names[1]] == "10 Mar 2014" and t.loc["loan repaid on", names[3]] == "10 Mar 2014" and t.loc["loan repaid on", names[0]] == "—"
+    assert t.loc["calls expired", names[2]] == "3 (0 worthless); the last call has not expired: a model mark today" and t.loc["calls expired", names[0]] == "—"
+    assert t.loc["tax paid", names[2]] == f"{sm.loc['tax paid', '3'] / m:,.0f} m" and t.loc["tax paid", names[4]] == "—" and t.loc["interest paid", names[1]] == f"{sm.loc['interest paid', '2'] / m:,.0f} m"
+    assert t.loc["holdings today", names[2]] == f"SPX {sm.loc['SPX today', '3'] / m:,.0f} m · calls {sm.loc['calls today', '3'] / m:,.0f} m (notional {sm.loc['call notional today', '3'] / m:,.0f} m)"
+    assert t.loc["holdings today", names[4]].startswith("SPX 0 m · calls ") and t.loc["SPX traded at expiries", names[2]].startswith("bought ") and t.loc["SPX traded at expiries", names[3]] == "—"
+    # the dot-com-peak chart: five NAV lines and the two LTV lines, the expiry markers, the loan repayment, the end labels, the wipe-out label; no margin-call label
+    p2000, _ = runs["2000-03-24"]
+    fig = json.loads(at.get("plotly_chart")[1].proto.spec)
+    assert [tr["name"] for tr in fig["data"]] == [names[0], names[1], "2: loan repaid", f"{names[1]}: LTV", names[2], "3: expiry", names[3], "4: expiry", f"{names[3]}: LTV", names[4], "5: expiry"]
+    for sid, j in (("1", 0), ("2", 1), ("3", 4), ("4", 6), ("5", 9)):
+        assert fig["data"][j]["y"][-1] == pytest.approx(p2000[sid]["nav"].iloc[-1] / m, rel=1e-9) and len(fig["data"][j]["x"]) == len(p2000[sid])
+    assert fig["data"][2]["x"] == ["2005-03-24T00:00:00"] and len(fig["data"][5]["x"]) == 5 and fig["data"][3]["y"][0] == pytest.approx(p2000["2"]["ltv"].iloc[0] * 100)
+    texts = [a["text"] for a in fig["layout"]["annotations"]]
+    assert "<b>5 wiped out</b> 24 Mar 2005" in texts and f"<span style='color:#2a78d6'>●</span> 1: {p2000['1']['nav'].iloc[-1] / m:,.0f} m" in texts and "margin call (LTV 90%)" in texts
+    assert not any("margin call</b>" in tx for tx in texts) and {tx for tx in texts if tx.startswith(("peak", "bottom"))} == {"peak Mar 2000", "bottom Oct 2002", "peak Oct 2007", "bottom Mar 2009", "peak Feb 2020", "bottom Mar 2020", "peak Jan 2022", "bottom Oct 2022"}   # the start is the peak day, so its line is drawn
+    for i in range(3):   # fixed margins on the three charts, the NAV axis linear
+        lay = json.loads(at.get("plotly_chart")[i].proto.spec)["layout"]
+        assert lay["margin"]["l"] == 80 and lay["margin"]["r"] == 120 and lay["yaxis"]["automargin"] is False and lay["yaxis"].get("type") != "log" and lay["yaxis"]["rangemode"] == "tozero"
+    # the margin-call flag: with the bank calling at 50 % of the lending value the levered long from the 2000 peak is called (LTV up to 59 %); the label, the marker and the overview cell follow the engine
+    at.number_input(key="f_margin").set_value(50.0).run()
+    assert not at.exception, [e.value for e in at.exception]
+    q, qi = simulate_scenarios("2000-03-24", "2026-09-14", margin_call=0.5)
+    first = qi["2"].margin_call_first
+    assert first is not None and qi["4"].margin_call_first is not None
+    fig = json.loads(at.get("plotly_chart")[1].proto.spec)
+    texts = [a["text"] for a in fig["layout"]["annotations"]]
+    assert f"<b>⚠ 2 margin call</b> {first:%d %b %Y} — LTV {float(q['2']['ltv'].loc[first]):.0%}" in texts and "margin call (LTV 50%)" in texts
+    flag = next(tr for tr in fig["data"] if tr["name"] == "2: margin call")
+    assert flag["x"] == [first.strftime("%Y-%m-%dT%H:%M:%S")] and flag["marker"]["symbol"] == "x" and flag["marker"]["color"] == "#c00000"
+    ov = at.table[0].value
+    assert f"⚠ margin call {first:%d %b %Y} (LTV {float(q['2']['ltv'].loc[first]):.0%}, {qi['2'].days_in_margin_call} days)" in ov.iloc[1][names[1]]
+    assert at.table[2].value.loc["margin call", names[1]] == f"⚠ first on {first:%d %b %Y} at LTV {float(q['2']['ltv'].loc[first]):.0%}, {qi['2'].days_in_margin_call} days in call (highest LTV {qi['2'].max_ltv:.0%})"
+    at.number_input(key="f_margin").set_value(90.0).run()
+    # log scale and an extra start
+    at.checkbox(key="f_log").check().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert all(json.loads(at.get("plotly_chart")[i].proto.spec)["layout"]["yaxis"]["type"] == "log" for i in range(3))
+    at.checkbox(key="f_extra").check().run()
+    at.date_input(key="f_extra_date").set_value(pd.Timestamp("2020-03-23").date()).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.get("plotly_chart")) == 4 and at.subheader[3].value == "Start 23 Mar 2020 — chosen start, SPX 2,237" and len(at.table) == 5 and list(at.table[0].value.index)[3] == "chosen start, 23 Mar 2020"
+    # the other pages' sidebars are untouched: page 2's labels as before, the shared tenor the same widget
+    at.selectbox(key="s_tenor").set_value(7).run()
+    at.switch_page("views/premium_history.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert [w.label for w in at.sidebar.number_input] == ["Premium / investment (USD m)", "Fixed premium (% of notional)", "Dividend withholding tax (%)"] and at.selectbox(key="s_tenor").value == 7
+    at.switch_page("views/five_scenarios.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox(key="s_tenor").value == 7 and any("rolling 7-year ATM calls" in c.value for c in at.caption) and at.number_input(key="f_margin").value == 90.0
