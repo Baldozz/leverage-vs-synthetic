@@ -129,6 +129,16 @@ def fmt_row(sm: pd.DataFrame, row: str, sid: str, info: fsc.ScenarioInfo) -> str
         return f"{v / M:,.0f} m · {sm.loc['annualised return', sid]:+.1%} a year"
     if row == "lowest NAV":
         return f"{v / M:,.0f} m, {sm.loc['lowest NAV on', sid]:%b %Y}"
+    if row == "max drawdown":
+        return f"{v:.0%}, {sm.loc['max drawdown on', sid]:%b %Y}"
+    if row == "volatility":
+        return "—" if pd.isna(v) else f"{v:.1%} a year"
+    if row in ("1-day VaR 95 / 99", "1-day CVaR 95 / 99"):   # not summary rows: the 95 and 99 % rows read here
+        key = row.split(" ")[1]
+        a, b = sm.loc[f"{key} 95 %", sid], sm.loc[f"{key} 99 %", sid]
+        return "—" if pd.isna(a) else f"{a:.1%} / {b:.1%}"
+    if row == "Sharpe ratio":
+        return "—" if pd.isna(v) else f"{v:.2f}"
     if row == "exposure today":
         return f"{v / M:,.0f} m"
     if row == "margin call":
@@ -181,7 +191,7 @@ def spread(values: dict[str, float], gap: float, log: bool) -> dict[str, float]:
     return {k: g(y) for k, y in zip(order, ys, strict=True)}
 
 
-ROWS = ("NAV today", "lowest NAV", "exposure today", "margin call", "loan repaid", "calls expired", "premiums paid", "payoffs received", "tax paid", "interest paid", "holdings today")
+ROWS = ("NAV today", "lowest NAV", "max drawdown", "volatility", "1-day VaR 95 / 99", "1-day CVaR 95 / 99", "Sharpe ratio", "exposure today", "margin call", "loan repaid", "calls expired", "premiums paid", "payoffs received", "tax paid", "interest paid", "holdings today")
 
 # ---------------- one section per start: the NAV of the five over time (top), the LTV of the two with a loan against the call level (bottom), the table
 for lab, d in runs:
@@ -325,6 +335,7 @@ st.caption("""**Reading the charts**
 st.caption("""**Reading the tables**
 - **Overview**: NAV today · annualised return since the start; ⚠ margin call (first month); ✕ wiped out.
 - **Per start**: the low and its month; exposure today; margin call (or the highest LTV); loan repaid; calls expired (worthless in brackets); money flows since the start; holdings today (calls alive in brackets).
+- **Risk**, on each scenario's own daily NAV returns from the start to today (to the wipe-out day for a wiped-out portfolio, whose last return is −100 %): max drawdown = the deepest fall from a running peak, and the month of the trough; volatility = the standard deviation of the daily returns × √252; 1-day VaR 95 / 99 = the loss not exceeded on 95 % / 99 % of the days, CVaR = the average loss on the days at or beyond it (historical, no distribution fitted, % of the NAV); Sharpe = (annualised return − the 3-month T-bill averaged over the period) ÷ volatility; — with fewer than two days or no volatility.
 - **CSV**: every start's daily path.""")
 st.caption("""**Caveats**
 - Consecutive starts overlap: the named starts are illustrations of history, not probabilities.

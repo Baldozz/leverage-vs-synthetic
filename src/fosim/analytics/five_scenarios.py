@@ -21,7 +21,9 @@ SPX with dividends reinvested net of withholding (TR), the loan simple ACT/360 c
 the market's implied vol of the day; the dollar delta of the live calls (Σ units · δ(t) · S(t)) is reported every day and the SPX-equivalent
 exposure is SPX + dollar delta. Tax = rate × max(payoff − premium paid, 0) at expiry, no loss carry-forward. Margin call (2 and 4): the
 loan above ``margin_call`` × the lending value of the holdings; flagged, no forced sale. NAV = SPX + calls + cash − loan; the accounting
-identity ΔNAV = ΔSPX + Δcalls + cash interest − loan interest − tax is asserted every day for every scenario.
+identity ΔNAV = ΔSPX + Δcalls + cash interest − loan interest − tax is asserted every day for every scenario. ``summary`` adds each path's
+risk measures on its own daily NAV returns: volatility, 1-day historical VaR/CVaR at 95 and 99 %, max drawdown and its day, and a Sharpe-like
+ratio against the 3-month T-bill averaged over the holding period.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
 from fosim.analytics.call_vs_cash import DAILY_FILE, tenor_columns, total_return_index
 from fosim.analytics.leverage_stress import (
@@ -40,8 +43,12 @@ from fosim.analytics.leverage_stress import (
     _nearest_index,
     corrections,
 )
+from fosim.analytics.metrics import var_cvar
 from fosim.pricing.black_scholes import bsm_greeks, bsm_price
 from fosim.pricing.implied_vol import implied_vol
+
+F64 = NDArray[np.float64]
+TRADING_DAYS = 252                     # one step of the daily file = one trading day; volatility annualised by √252
 
 SCENARIOS = ("1", "2", "3", "4", "5")
 LABELS = {"1": "Long the market", "2": "Levered long", "3": "SPX + calls", "4": "Long + calls on a loan", "5": "All in calls"}
@@ -106,8 +113,10 @@ def simulate_scenarios(
     tax_rate: float = 0.24, tax_on: tuple[str, ...] = ("3", "4", "5"), lv_equity: float = 0.75, lv_calls: float = 0.0, lv_cash: float = 0.90,
     margin_call: float = 0.90, wht: float = 0.15, repay: str = "tenor", repay_calls: str = "surplus", rebalance: str = "portfolio",
     sizing: str = "premium", exposure_frac: float = 0.86, build_steps: int = 52, build_unit: str = "week", file: Path | str | None = None,
+    scenarios: tuple[str, ...] = SCENARIOS,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, ScenarioInfo]]:
-    """Daily path of the five scenarios from ``start`` to ``end`` (nearest trading days). See the module docstring.
+    """Daily path of the five scenarios from ``start`` to ``end`` (nearest trading days). See the module docstring. ``scenarios``: the ids to
+    run (all five by default; each scenario's path is independent of the others, so a subset is bit-identical to its columns in the full run).
 
     ``loan_rate``: flat annual rate of the loans (0.055 default); ``None`` uses the 3-month base rate of the day + ``spread``.
     ``premium``: the call premium as a fraction of notional (0.145 default), the calls marked at the vol it implies on the purchase day;
@@ -144,6 +153,8 @@ def simulate_scenarios(
         raise ValueError("exposure_frac must be non-negative and build_steps at least 1")
     if rebalance == "proceeds" and sizing == "exposure":
         raise ValueError("rebalance='proceeds' splits a premium budget: use it with sizing='premium'")
+    if not scenarios or any(s not in SCENARIOS for s in scenarios):
+        raise ValueError(f"scenarios must be a non-empty subset of {SCENARIOS}")
     full = _load(str(file or DAILY_FILE))
     rate_col, vol_col = tenor_columns(full, tenor)
     d = full.dropna(subset=["spxfp", "spx_px_last", "spx_div_yld", "loan_base", "tbill_3m", rate_col, vol_col]).reset_index(drop=True)
@@ -401,6 +412,7 @@ def simulate_scenarios(
             "lending_value": lending_value, "ltv": ltv, "headroom": headroom, "margin_call": in_call,
             "interest": interest, "tax": tax_day, "eq_pnl": eq_pnl, "call_pnl": call_pnl, "cash_int": cash_int, "spx_traded": spx_traded, "expiry": is_expiry,
             "interest_cum": np.cumsum(interest), "tax_cum": np.cumsum(tax_day), "premiums_cum": np.cumsum(prem_day), "payoffs_cum": np.cumsum(pay_day),
+            "tbill": tbill,   # the 3-month T-bill of the day (fraction): the cash leg's rate, and the Sharpe's risk-free rate in ``summary``
         }, index=pd.DatetimeIndex(d.date, name="date"))
         first_call = pd.Timestamp(out.index[int(np.argmax(in_call))]) if in_call.any() else None
         k_build_end = build_days[-1] if buys_calls else 0
@@ -413,7 +425,7 @@ def simulate_scenarios(
 
     paths: dict[str, pd.DataFrame] = {}
     infos: dict[str, ScenarioInfo] = {}
-    for sid in SCENARIOS:
+    for sid in scenarios:
         paths[sid], infos[sid] = run(sid)
     return paths, infos
 
@@ -433,7 +445,44 @@ def default_starts(file: Path | str | None = None) -> dict[str, pd.Timestamp]:
     return out
 
 
-SUMMARY_ROWS = ("NAV today", "total return", "annualised return", "lowest NAV", "lowest NAV on", "max drawdown", "margin call first on", "LTV at the first margin call",
+def daily_returns(nav: F64) -> F64:
+    """Simple step returns r_k = NAV_k / NAV_{k−1} − 1 on the days with NAV_{k−1} > 0 (one step = one trading day of the daily file).
+    A wiped-out path is passed cut at its wipe-out day: that day's return is −100 %, nothing follows."""
+    nav = np.asarray(nav, dtype=np.float64)
+    prev, nxt = nav[:-1], nav[1:]
+    keep = prev > 0.0                  # masked before dividing: never a division by a zero NAV
+    return np.asarray(nxt[keep] / prev[keep] - 1.0, dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class RiskMeasures:
+    """Risk measures of one path (docs/METHODOLOGY.md §10, "Risk measures"): fractions, losses positive; NaN with fewer than two returns."""
+    n: int                 # daily returns in the sample
+    volatility: float      # std(ddof = 1) × √252
+    var95: float           # 1-day historical VaR at 95 %
+    cvar95: float          # the mean loss on the days with a loss ≥ VaR 95
+    var99: float
+    cvar99: float
+    sharpe: float          # (annualised return − T-bill average) / volatility; NaN when the volatility is 0
+
+
+def risk_measures(nav: F64, ann_return: float, tbill_avg: float, steps_per_year: int = TRADING_DAYS) -> RiskMeasures:
+    """Volatility, 1-day historical VaR/CVaR at 95 and 99 % (``metrics.var_cvar``, numpy's linear percentile) and the Sharpe-like ratio of a
+    NAV path, on its own step returns (``daily_returns``)."""
+    r = daily_returns(nav)
+    n = int(r.size)
+    nan = float("nan")
+    if n < 2:                          # std(ddof = 1) and the percentile need two returns (a RuntimeWarning is an error in the suite)
+        return RiskMeasures(n, nan, nan, nan, nan, nan, nan)
+    vol = float(r.std(ddof=1)) * float(np.sqrt(steps_per_year))
+    v95, c95 = var_cvar(r, 0.95)
+    v99, c99 = var_cvar(r, 0.99)
+    sharpe = (ann_return - tbill_avg) / vol if vol > 0.0 else nan
+    return RiskMeasures(n, vol, v95 + 0.0, c95 + 0.0, v99 + 0.0, c99 + 0.0, sharpe)   # + 0.0: a flat path gives −0.0 from −percentile(0)
+
+
+SUMMARY_ROWS = ("NAV today", "total return", "annualised return", "lowest NAV", "lowest NAV on", "max drawdown", "max drawdown on", "returns counted",
+                "volatility", "VaR 95 %", "CVaR 95 %", "VaR 99 %", "CVaR 99 %", "T-bill average", "Sharpe ratio", "margin call first on", "LTV at the first margin call",
                 "days in margin call", "max LTV", "loan repaid on", "build completed on", "premium paid in the build", "exposure at the end of the build",
                 "calls expired", "expired worthless", "wiped out on", "premiums paid", "payoffs received", "tax paid",
                 "interest paid", "SPX bought at expiries", "SPX sold at expiries", "SPX today", "calls today", "calls alive today", "call notional today", "exposure today",
@@ -441,17 +490,25 @@ SUMMARY_ROWS = ("NAV today", "total return", "annualised return", "lowest NAV", 
 
 
 def summary(paths: dict[str, pd.DataFrame], infos: dict[str, ScenarioInfo]) -> pd.DataFrame:
-    """One column per scenario, one row per fact (``SUMMARY_ROWS``): USD, fractions, dates (NaT / None where not applicable)."""
+    """One column per scenario, one row per fact (``SUMMARY_ROWS``): USD, fractions, counts, dates (NaT / None where not applicable). The risk
+    rows are read on the scenario's daily NAV returns, a wiped-out path cut at its wipe-out day (``risk_measures``)."""
     cols: dict[str, dict[str, object]] = {}
     for sid, p in paths.items():
         info = infos[sid]
         nav, nav0 = p["nav"], float(p["nav"].iloc[0])
         years = (p.index[-1] - p.index[0]).days / 365.25
         end = float(nav.iloc[-1])
+        ann = (max(end, 0.0) / nav0) ** (1.0 / years) - 1.0
+        dd = nav / nav.cummax() - 1.0
+        stop = int((p.index <= info.wiped_out_on).sum()) if info.wiped_out_on is not None else len(p)   # the wipe-out day included, nothing after
+        tbill_avg = float(p["tbill"].mean())
+        rm = risk_measures(nav.to_numpy(dtype=np.float64)[:stop], ann, tbill_avg)
         first = info.margin_call_first
         cols[sid] = {
-            "NAV today": end, "total return": end / nav0 - 1.0, "annualised return": (max(end, 0.0) / nav0) ** (1.0 / years) - 1.0,
-            "lowest NAV": float(nav.min()), "lowest NAV on": nav.idxmin(), "max drawdown": float((nav / nav.cummax() - 1.0).min()),
+            "NAV today": end, "total return": end / nav0 - 1.0, "annualised return": ann,
+            "lowest NAV": float(nav.min()), "lowest NAV on": nav.idxmin(), "max drawdown": float(dd.min()), "max drawdown on": dd.idxmin(),
+            "returns counted": rm.n, "volatility": rm.volatility, "VaR 95 %": rm.var95, "CVaR 95 %": rm.cvar95, "VaR 99 %": rm.var99, "CVaR 99 %": rm.cvar99,
+            "T-bill average": tbill_avg, "Sharpe ratio": rm.sharpe,
             "margin call first on": first if first is not None else pd.NaT, "LTV at the first margin call": float(p["ltv"].loc[first]) if first is not None else np.nan,
             "days in margin call": info.days_in_margin_call, "max LTV": info.max_ltv, "loan repaid on": info.loan_repaid_on if info.loan_repaid_on is not None else pd.NaT,
             "build completed on": info.build_end if info.n_tranches else pd.NaT, "premium paid in the build": info.premium_build, "exposure at the end of the build": info.exposure_build,

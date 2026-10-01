@@ -26,7 +26,7 @@ Output: (1) P&L of the call (payoff − premium) and of the cash investment agai
 
 Caveats shown on the page: strikes are daily so consecutive observations overlap almost entirely (a range of outcomes, not independent draws); no bid/ask, no early unwind; the 5-year vol is extrapolated from the 24-month Bloomberg series (VIX proxy before May 2005). At 7 and 10 years the page uses `ust_7y`/`iv_7y` and `ust_10y`/`iv_10y` (built by `scripts/build_long_tenor_columns.py`; the 7-year yield is interpolated until a `USGG7YR` export is supplied, the vols are extrapolated as at 5 years); for any other tenor without its own columns it warns and falls back to the 5-year series.
 
-## The five scenarios — a separate, simplified exercise (page 3)
+## The five scenarios — a separate, simplified exercise (pages 3 and 4)
 **Independent of pages 1 and 2**: a different portfolio (a capital, default 650 m, not the 1 bn with the 250 m loan), the investor's own rules kept as simple as written (a fixed 14.5 % premium, a flat 5.5 % loan, 24 % tax at expiry; no delta-sized rotation, no roll matching, no band), its own sidebar and engine; only the market data, the pricer, the call tenor and the withholding tax are shared.
 The investor's five ways to hold the capital (default 650 m), each held from a start date to today: **1** long the market; **2** levered long
 (the capital plus a loan of 25 % of it in SPX, at a flat 5.5 %, interest capitalised, the loan repaid from SPX after one tenor); **3** SPX + a
@@ -43,13 +43,31 @@ and scenario, with ⚠ where a levered scenario was margin-called (the loan abov
 its last call; then, per start, a chart with three rows: the five NAVs (hollow circles = slot expiries with the payoff, tax and the new call on
 hover; the triangle = scenario 2's loan repaid; the grey band = the build; a red ✕, a label and shaded days = a margin call), the SPX-equivalent
 exposure of each scenario (SPX held + the dollar delta of its calls), and the LTV of scenarios 2 and 4 against the call level; then a short table
-of the run (numbers and dates only). Every explanation — the scenarios, the sleeve, the rules at expiry, the departures from the investor's note, how to read the charts — is in
+of the run (numbers and dates only). Its risk rows are read on the scenario's own daily NAV returns, start to today (to the wipe-out day for a
+wiped-out portfolio): *max drawdown* = the deepest fall from a running peak and the month of the trough; *volatility* = the standard deviation of
+the daily returns × √252; *1-day VaR 95 / 99* = the daily loss not exceeded on 95 % / 99 % of the days, *CVaR* = the average loss on the days at
+or beyond it (historical, % of the NAV); *Sharpe ratio* = (annualised return − the 3-month T-bill averaged over the period) ÷ volatility. Every explanation — the scenarios, the sleeve, the rules at expiry, the departures from the investor's note, how to read the charts — is in
 the notes at the foot of the page. The sidebar holds the capital, the loan share, the call sleeve (sized by exposure or by premium, the
 %, built weekly or monthly in how many steps), the rate, the premium (fixed, or the market's vol of the day), the tax (every call scenario
-alike), the tenor; under *Advanced* the lending values and the call level, the withholding tax, and the three readings of the investor's note
-(scenario 2's loan repaid after one tenor or never; scenario 4 at a slot's expiry — the loan share repaid and only the surplus in new calls, repaid and the slot refilled from SPX, or never repaid with every new call on a new loan; scenario 3 refilling a
-slot from the whole portfolio or only from the proceeds — the latter under premium sizing only).
+alike), the tenor; then, visible under *The scenarios' rules* in scenario order, the three readings of the investor's note (scenario 2's loan
+repaid after one tenor or never; scenario 3 refilling a slot from the whole portfolio or only from the proceeds — the latter under premium sizing
+only; scenario 4 at a slot's expiry — the loan share repaid and only the surplus in new calls, repaid and the slot refilled from SPX, or never
+repaid with every new call on a new loan); under *Advanced* the lending values and the call level and the withholding tax.
 *Download every start's daily paths as CSV* writes every (start, scenario, day). Nothing is sold on a margin call: it is flagged, not acted on.
+
+### Page 4 — Call-share sweep
+Page 3's scenario 3 (SPX + a sleeve of rolling calls) alone, with the size of its call sleeve swept: 0 % (the long portfolio exactly, drawn as a
+diamond), then the sidebar's range — 5 → 50 % of the capital in premium in steps of 5 % by default (*from / to / step*; under exposure sizing
+the exposure share, 10 → 100 % step 10). *Starts*: the five named starts run as the sidebar changes (a few seconds); *every month-end start* runs
+on the **Launch** button (the last trading day of each month up to the last start whose whole build has reached its first expiry, about twenty
+minutes the first time, then cached). The page shows the risk–return frontier (annualised volatility across, annualised return up, one curve per
+start, the points labelled by the share — up and to the left is better), the measures against the share (return, volatility, max drawdown, 1-day
+VaR and CVaR at 99 %, Sharpe ratio), and a table per start × share; in month-end mode also the annualised return as a 3-D surface over (start
+date, call share) or a heatmap (toggle), the median and 5th–95th percentile bands across the starts at each share with the named starts drawn
+thin on top, and an across-starts table (median return, its 5th–95th, median volatility and Sharpe, the worst max drawdown, the share of starts on
+which the mix beats the long portfolio). The sidebar carries page 3's inputs that bear on scenario 3 under its own keys (page 3's settings are
+untouched): capital, sizing and the swept range, the build, the premium, the tax, scenario 3's refill rule, the tenor and the withholding tax.
+*Download the sweep as CSV* writes every (start, share) row with the whole summary of the run. Every explanation is in the notes at the foot.
 
 ## Supporting apps (strategy simulator, kept for reference)
 * **Historical strategy replay** — `.venv/bin/streamlit run app/strategy_replay_app.py`: pick capital, allocation, leverage, start date and Strategy B choices; leave the three historical inputs blank (Lombard cost, cash yield, LT option premium) or fill them; enter each strategy's starting balance sheet (equities / loan / cash, common illiquids) in the table, choose how B accumulates its option book (notional bought per week or month, target book, tenor), and press *Run historical replay* to see what A, B and C would have done through the actual S&P 500 history (weekly or monthly steps). No Monte Carlo.

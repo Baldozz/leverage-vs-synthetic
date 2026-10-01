@@ -11,8 +11,10 @@ from fosim.analytics.five_scenarios import (
     LABELS,
     SCENARIOS,
     SUMMARY_ROWS,
+    daily_returns,
     default_starts,
     paths_table,
+    risk_measures,
     simulate_scenarios,
     summary,
 )
@@ -180,6 +182,61 @@ def test_scenario_5_rolls_untaxed_and_ends_on_a_worthless_expiry(tmp_path: Path)
     assert pr["nav"].iloc[k - 1] > 0.0 and summary(r, rn).loc["annualised return", "5"] == -1.0
     for sid in SCENARIOS:
         _identity(r[sid])
+    # the risk measures stop on the wipe-out day: its return is −100 %, the zero NAV after it is not a sample of returns
+    sm = summary(r, rn)
+    nav5 = pr["nav"].to_numpy()
+    ret = nav5[1 : k + 1] / nav5[:k] - 1.0
+    assert sm.loc["returns counted", "5"] == k and ret[-1] == -1.0 and np.isfinite(ret).all()
+    assert sm.loc["volatility", "5"] == pytest.approx(ret.std(ddof=1) * np.sqrt(252), rel=1e-12) and sm.loc["VaR 99 %", "5"] == pytest.approx(-np.percentile(ret, 1), rel=1e-12)
+    assert sm.loc["VaR 95 %", "5"] <= sm.loc["VaR 99 %", "5"] <= sm.loc["CVaR 99 %", "5"] <= 1.0 and sm.loc["CVaR 95 %", "5"] >= sm.loc["VaR 95 %", "5"]
+    assert sm.loc["T-bill average", "5"] == pytest.approx(0.02, rel=1e-12) and sm.loc["Sharpe ratio", "5"] == pytest.approx((-1.0 - 0.02) / sm.loc["volatility", "5"], rel=1e-12)
+    assert sm.loc["max drawdown", "5"] == -1.0 and sm.loc["max drawdown on", "5"] <= pr.index[k]
+
+
+def test_risk_measures_closed_forms(tmp_path: Path) -> None:
+    """Risk on the daily NAV returns (METHODOLOGY §10, "Risk measures"). 101 returns, so numpy's linear percentile lands on order statistics:
+    the 5th percentile is the 6th smallest return, the 1st the 2nd smallest; σ = s(r)·√252 with ddof = 1; CVaR = the mean loss at or beyond VaR."""
+    r = np.arange(-50, 51) * 1e-4                          # −50 bp … +50 bp, mean 0
+    nav = C * np.cumprod(np.concatenate([[1.0], 1.0 + r]))
+    assert np.allclose(daily_returns(nav), r, rtol=0.0, atol=1e-15)
+    rm = risk_measures(nav, 0.10, 0.02)
+    assert rm.n == 101 and rm.volatility == pytest.approx(np.sqrt(85_850 / 100) * 1e-4 * np.sqrt(252), rel=1e-12)   # Σ i² over −50..50 = 85,850
+    assert rm.var95 == pytest.approx(45e-4, rel=1e-9) and rm.var99 == pytest.approx(49e-4, rel=1e-9)
+    assert rm.cvar95 == pytest.approx(47.5e-4, rel=1e-9) and rm.cvar99 == pytest.approx(49.5e-4, rel=1e-9)
+    assert rm.sharpe == pytest.approx((0.10 - 0.02) / rm.volatility, rel=1e-12)
+    # distinct returns in no order: the order statistics and np.percentile agree with the reuse of metrics.var_cvar
+    s = 0.012 * np.sin(np.arange(1, 102))
+    rs = risk_measures(C * np.cumprod(np.concatenate([[1.0], 1.0 + s])), 0.0, 0.0)
+    srt = np.sort(s)
+    assert rs.var95 == pytest.approx(-srt[5], rel=1e-9) and rs.var95 == pytest.approx(-np.percentile(s, 5), rel=1e-9) and rs.var99 == pytest.approx(-srt[1], rel=1e-9)
+    assert rs.cvar95 == pytest.approx(-srt[:6].mean(), rel=1e-9) and rs.cvar99 == pytest.approx(-srt[:2].mean(), rel=1e-9)
+    # a flat NAV: no volatility, no loss (+0.0, not −0.0), the Sharpe undefined; fewer than two returns: everything NaN
+    flat = risk_measures(np.full(10, C), 0.0, 0.02)
+    assert flat.volatility == 0.0 and flat.var95 == 0.0 and not np.signbit(flat.var95) and flat.cvar99 == 0.0 and np.isnan(flat.sharpe)
+    one = risk_measures(np.array([C, 1.1 * C]), 0.1, 0.02)
+    assert one.n == 1 and all(np.isnan(x) for x in (one.volatility, one.var95, one.cvar95, one.var99, one.cvar99, one.sharpe))
+    assert risk_measures(np.array([C]), 0.0, 0.0).n == 0
+    assert list(daily_returns(np.array([1.0, 0.0, 0.0, 0.0]))) == [-1.0]   # nothing after a zero NAV, no division by zero
+    # summary on the exponential path: scenario 1's NAV = C·TR grows by the same factor every day — a constant return, no risk;
+    # a sloping T-bill (1 % → 3 %) averaged over the path, the same for every scenario
+    n = 600
+    spx = 100.0 * np.exp(np.linspace(0.0, 0.3, n))
+    tb = np.linspace(1.0, 3.0, n)
+    f = _file(tmp_path, spx, tbill=tb)  # type: ignore[arg-type]
+    paths, infos = simulate_scenarios("2010-01-04", "2012-04-20", tenor=1.0, file=f, **OLD)
+    sm = summary(paths, infos)
+    g = np.exp(0.3 / (n - 1)) - 1.0
+    assert sm.loc["returns counted", "1"] == n - 1 and sm.loc["volatility", "1"] < 1e-10
+    assert sm.loc["VaR 95 %", "1"] == pytest.approx(-g, rel=1e-9) and sm.loc["CVaR 99 %", "1"] == pytest.approx(-g, rel=1e-9)   # a gain every day: a negative loss
+    assert all(sm.loc["T-bill average", sid] == pytest.approx(tb.mean() / 100.0, rel=1e-12) for sid in SCENARIOS)
+    assert sm.loc["max drawdown", "1"] == 0.0 and sm.loc["max drawdown on", "1"] == paths["1"].index[0]
+    for sid in SCENARIOS:
+        nav_s = paths[sid]["nav"]
+        assert sm.loc["max drawdown on", sid] == (nav_s / nav_s.cummax() - 1.0).idxmin()
+        if sm.loc["volatility", sid] > 1e-10:
+            assert sm.loc["Sharpe ratio", sid] == pytest.approx((sm.loc["annualised return", sid] - sm.loc["T-bill average", sid]) / sm.loc["volatility", sid], rel=1e-12)
+        _identity(paths[sid])
+    assert sm.loc["volatility", "3"] > 0.0 and np.isfinite(sm.loc["Sharpe ratio", "3"])   # the calls' mark moves: scenario 3 has a volatility
 
 
 def test_fixed_premium_marks_and_market_mode(tmp_path: Path) -> None:
@@ -232,6 +289,12 @@ def test_the_record_and_the_tables() -> None:
     years = (paths["1"].index[-1] - paths["1"].index[0]).days / 365.25
     assert sm.loc["annualised return", "1"] == pytest.approx((paths["1"]["nav"].iloc[-1] / C) ** (1 / years) - 1) and sm.loc["calls expired", "3"] == 5 and sm.loc["expired worthless", "3"] == 2
     assert sm.loc["lowest NAV on", "2"] == paths["2"]["nav"].idxmin() and sm.loc["max drawdown", "5"] == -1.0 and pd.isna(sm.loc["margin call first on", "2"]) and sm.loc["max LTV", "2"] == infos["2"].max_ltv
+    # the risk rows on the real path: the long portfolio's daily volatility and 1-day VaR in the SPX's range; all in calls far riskier,
+    # its sample ending on the wipe-out day; the tail ordered VaR 95 ≤ VaR 99 ≤ CVaR 99
+    assert 0.1 < sm.loc["volatility", "1"] < 0.3 and 0.01 < sm.loc["VaR 95 %", "1"] < 0.03 and sm.loc["volatility", "5"] > sm.loc["volatility", "1"]
+    assert sm.loc["returns counted", "5"] == int((paths["5"].index <= pd.Timestamp("2005-03-24")).sum()) - 1 and sm.loc["returns counted", "1"] == len(paths["1"]) - 1
+    assert all(sm.loc["VaR 95 %", sid] <= sm.loc["VaR 99 %", sid] <= sm.loc["CVaR 99 %", sid] and sm.loc["VaR 95 %", sid] <= sm.loc["CVaR 95 %", sid] for sid in SCENARIOS)
+    assert sm.loc["T-bill average", "1"] == pytest.approx(paths["1"]["tbill"].mean()) and sm.loc["Sharpe ratio", "5"] < 0.0
     long = paths_table({"dot-com peak": paths})
     assert len(long) == 5 * len(paths["1"]) and list(long.columns[:3]) == ["start", "scenario", "date"] and long["scenario"].iloc[0] == "1 Long the market"
     assert long.loc[long["scenario"] == "5 All in calls", "nav"].iloc[-1] == 0.0 and long["nav"].iloc[0] == pytest.approx(650.0)

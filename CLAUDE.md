@@ -13,7 +13,10 @@ separate, simplified exercise, kept apart from the above in every document** (RE
 LIMITATIONS 18, its own navigation group in the app): `app/views/five_scenarios.py`, engine `src/fosim/analytics/five_scenarios.py` — the investor's
 five ways to hold 650 m from five start dates (data start, dot-com peak and bottom, GFC peak and bottom) (long, levered long, SPX + a call sleeve, long + the sleeve on a loan, all in calls; the sleeve sized by
 premium — 25 % of the capital, the note's 162.5 m — or by exposure as an option, built in 52 weekly slots, the money waiting in SPX; fixed 14.5 % premium, 24 % tax
-at every call expiry, margin calls flagged), none of Part 1's rules, sharing only the data and the pricer. Keep the two parts separate when editing docs.
+at every call expiry, margin calls flagged), none of Part 1's rules, sharing only the data and the pricer. **Page 4 ("Call-share sweep") belongs to the same separate group**: scenario 3 alone with its call share swept (0 % = the long
+portfolio, then 5 → 50 % step 5 by default) from the five named starts or every month-end start (Launch button, surface) — `app/views/call_share_sweep.py`, engine
+`src/fosim/analytics/call_share_sweep.py` over `simulate_scenarios(..., scenarios=("3",))`, tests `tests/test_call_share_sweep.py`, METHODOLOGY §10 bullet, ASSUMPTIONS 41,
+LIMITATIONS 19; its sidebar keys `c_*` share page 3's widget helpers in `app/common.py`. Keep the two parts separate when editing docs.
 The earlier Monte Carlo simulator (strategies A/B/C/D, `SPEC.md`, `docs/PLAN.md`, `app/streamlit_app.py`) is kept
 for reference and its tests still run.
 
@@ -59,7 +62,7 @@ Any decision rule at step k may read only market state at indices ≤ k. `Market
 - `.venv/bin/python -m pytest` — full suite (must be green before any stage is declared done).
 - `.venv/bin/ruff check . && .venv/bin/mypy` — must be clean for `src/fosim` and `validation/`.
 - `.venv/bin/python -m fosim.reporting.validation_report` — regenerates `reports/validation_report.html`.
-- `.venv/bin/streamlit run app/historical_app.py` — the decision app (three pages: "Historical simulation", "Call premium history", "Five scenarios"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
+- `.venv/bin/streamlit run app/historical_app.py` — the decision app (four pages: "Historical simulation", "Call premium history", "Five scenarios", "Call-share sweep"); `app/streamlit_app.py` and `app/strategy_replay_app.py` are the earlier Monte Carlo and strategy-replay apps.
 - `.venv/bin/python scripts/export_trajectories.py [--grid daily] [--sample W]` — every start's trajectory to a long CSV under `reports/` (generated, not committed).
 - Page tests use Streamlit's AppTest on the weekly grid (`at.session_state["s_grid"] = "every week"`); the bottom tables are cross-checked against direct `simulate()` runs — keep that check when the layout changes.
-- The engine module is imported once by the running server: restart it after changing `leverage_stress.py` or `five_scenarios.py` (page files reload on save).
+- The engine module is imported once by the running server: restart it after changing `leverage_stress.py`, `five_scenarios.py` or `call_share_sweep.py` (page files reload on save).

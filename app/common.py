@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+import fosim.analytics.call_share_sweep as css  # noqa: E402
 import fosim.analytics.call_vs_cash as cvc  # noqa: E402
 import fosim.analytics.five_scenarios as fsc  # noqa: E402
 import fosim.analytics.leverage_stress as lvs  # noqa: E402
@@ -210,47 +211,92 @@ _SIZING = {"premium: % of the capital": "premium", "exposure: % of the capital i
 _BUILD_UNIT = {"weekly": "week", "monthly": "month"}
 
 
+# the sleeve, the calls and scenario 3's rule are drawn by pages 3 and 4 alike, each under its own key prefix ("f_" page 3, "c_" page 4) so the two
+# pages' settings are independent; the tenor and the withholding tax stay the shared s_* widgets
+_SCEN_DEFAULTS: dict[str, object] = {"capital": 650.0, "sizing": next(iter(_SIZING)), "exp_pct": 86.0, "call_pct": 25.0, "build_unit": "weekly", "build_steps": 52,
+                                     "prem_mode": "fixed % of notional", "prem": 14.5, "tax": 24.0, "rebalance": next(iter(_REBAL))}
+_SWEEP_DEFAULTS: dict[str, object] = {"prem_from": 5.0, "prem_to": 50.0, "prem_step": 5.0, "exp_from": 10.0, "exp_to": 100.0, "exp_step": 10.0}   # page 4: the swept range, % of the capital
+_SIZING_HELP = ("Premium (the investor's note): this share of the capital is spent on premium — 25 % = 162.5 m, 1,120 m of notional — whatever exposure that buys at the model's delta. "
+                "Exposure (option): the sleeve carries this share of the capital in SPX-equivalent (the model delta × the notional) and the premium follows — exposure × premium % ÷ delta of the day; 86 % = the note's 560 m of delta. "
+                "Scenario 3 holds the rest in SPX and refills each slot to its share of the portfolio at expiry; scenario 4 borrows the premium; scenario 5 puts everything in calls either way.")
+
+
+def _capital_widget(p: str, help_: str) -> None:
+    st.markdown("**The capital**")
+    st.number_input("Capital (USD m)", 10.0, 100000.0, step=50.0, key=f"{p}_capital", help=help_)
+
+
+def _range_row(p: str, name: str, label: str, hi: float, step: float, disabled: bool) -> None:
+    """Three inputs on one row — from / to / step, % of the capital — for the share page 4 sweeps."""
+    st.caption(label)
+    c1, c2, c3 = st.columns(3)
+    c1.number_input("from", 0.0, hi, step=step, key=f"{p}_{name}_from", disabled=disabled)
+    c2.number_input("to", 0.0, hi, step=step, key=f"{p}_{name}_to", disabled=disabled)
+    c3.number_input("step", 0.5, hi, step=step, key=f"{p}_{name}_step", disabled=disabled)
+
+
+def _sleeve_block(p: str, sweep: bool) -> bool:
+    """The call sleeve: how it is sized (one share on page 3; on page 4 the swept range from / to / step of the active sizing) and how it is
+    built. Returns whether it is sized by exposure."""
+    st.markdown("**The call sleeve**")
+    st.radio("Sized by", list(_SIZING), key=f"{p}_sizing", help=_SIZING_HELP)
+    by_exposure = _SIZING[str(st.session_state[f"{p}_sizing"])] == "exposure"
+    if sweep:
+        _range_row(p, "prem", "Premium share swept (% of the capital)", 99.0, 5.0, disabled=by_exposure)
+        _range_row(p, "exp", "Exposure share swept (% of the capital)", 500.0, 10.0, disabled=not by_exposure)
+    else:
+        st.number_input("Exposure (% of the capital)", 0.0, 500.0, step=5.0, key=f"{p}_exp_pct", disabled=not by_exposure, help="SPX-equivalent exposure of the calls at purchase, as a share of the capital.")
+        st.number_input("Premium (% of the capital)", 0.0, 99.0, step=5.0, key=f"{p}_call_pct", disabled=by_exposure, help="Premium spent, as a share of the capital.")
+    st.radio("Built", list(_BUILD_UNIT), key=f"{p}_build_unit", horizontal=True, help="The calls are bought in equal slots a week or a month apart, the money waiting in SPX and rotated slot by slot (scenario 4 draws the loan slot by slot). Each slot has its own expiry and is rolled on its own.")
+    weekly = _BUILD_UNIT[str(st.session_state[f"{p}_build_unit"])] == "week"
+    st.session_state[f"{p}_build_steps"] = int(min(int(st.session_state[f"{p}_build_steps"]), 104 if weekly else 24))
+    st.number_input("Steps (1 = all on the start day)", 1, 104 if weekly else 24, step=1, key=f"{p}_build_steps", help="Up to two years: 104 weekly or 24 monthly steps.")
+    return by_exposure
+
+
+def _calls_block(p: str, tax_help: str) -> None:
+    st.markdown("**The calls**")
+    _tenor_widget()
+    st.radio("Premium", list(_PREM_MODE), key=f"{p}_prem_mode", help="Fixed: every call costs this share of its notional, whatever the vol of the day, and is marked at the vol that share implies on its purchase day. Market: priced and marked at the tenor's implied vol of the day (Assumptions 19l).")
+    fixed_prem = str(st.session_state[f"{p}_prem_mode"]) == "fixed % of notional"
+    st.number_input("Premium (% of notional)", 1.0, 60.0, step=0.5, key=f"{p}_prem", disabled=not fixed_prem)
+    st.number_input("Tax on the profit at expiry (%)", 0.0, 90.0, step=1.0, key=f"{p}_tax", help=tax_help)
+
+
+def _rebalance_widget(p: str, by_exposure: bool) -> None:
+    """Scenario 3's rule at a slot's expiry; under exposure sizing only the whole-portfolio refill exists (the engine refuses the other)."""
+    if by_exposure:
+        st.session_state[f"{p}_rebalance"] = next(iter(_REBAL))
+    st.radio("Scenario 3 at a slot's expiry, refill from:", list(_REBAL), key=f"{p}_rebalance", disabled=by_exposure, help="The user's reading (2026-09-29): the slot is refilled to its share of the whole portfolio, SPX sold when the call expired worthless and bought when it paid. The literal alternative splits only the after-tax proceeds (premium sizing only).")
+
+
 def scenarios_sidebar() -> ScenarioSetup:
     """Page 3's sidebar: the investor's five scenarios. Drawn by the entry script when that page is shown; read back with ``scenario_setup``."""
-    for k, v in (("f_capital", 650.0), ("f_call_pct", 25.0), ("f_loan_pct", 25.0), ("f_rate_mode", "fixed rate"), ("f_rate", 5.5), ("f_spread", 75.0), ("f_prem_mode", "fixed % of notional"),
-                 ("f_prem", 14.5), ("f_tax", 24.0), ("f_lv", 75.0), ("f_lv_calls", 0.0), ("f_margin", 90.0), ("f_repay", "repaid from SPX after one tenor"), ("f_repay4", next(iter(_REPAY4))),
-                 ("f_rebalance", "the whole portfolio, SPX sold or bought"), ("f_sizing", next(iter(_SIZING))), ("f_exp_pct", 86.0), ("f_build_unit", "weekly"), ("f_build_steps", 52)):
+    for k, v in _SCEN_DEFAULTS.items():
+        _restore(f"f_{k}", v)
+    for k, v in (("f_loan_pct", 25.0), ("f_rate_mode", "fixed rate"), ("f_rate", 5.5), ("f_spread", 75.0), ("f_lv", 75.0), ("f_lv_calls", 0.0), ("f_margin", 90.0),
+                 ("f_repay", "repaid from SPX after one tenor"), ("f_repay4", next(iter(_REPAY4)))):
         _restore(k, v)
     with st.sidebar:
         st.caption("Separate exercise — its inputs are its own; page 1's setup is not used here.")
-        st.markdown("**The capital**")
-        st.number_input("Capital (USD m)", 10.0, 100000.0, step=50.0, key="f_capital", help="Scenario 1 holds it all in SPX; the other four are built from it as below.")
+        _capital_widget("f", "Scenario 1 holds it all in SPX; the other four are built from it as below.")
         st.number_input("Loan (% of the capital)", 0.0, 99.0, step=5.0, key="f_loan_pct", help="Scenario 2: borrowed and invested in SPX on top of the capital. Scenario 4's loan is the call sleeve's premium.")
-        st.markdown("**The call sleeve**")
-        st.radio("Sized by", list(_SIZING), key="f_sizing", help="Premium (the investor's note): this share of the capital is spent on premium — 25 % = 162.5 m, 1,120 m of notional — whatever exposure that buys at the model's delta. Exposure (option): the sleeve carries this share of the capital in SPX-equivalent (the model delta × the notional) and the premium follows — exposure × premium % ÷ delta of the day; 86 % = the note's 560 m of delta. Scenario 3 holds the rest in SPX and refills each slot to its share of the portfolio at expiry; scenario 4 borrows the premium; scenario 5 puts everything in calls either way.")
-        by_exposure = _SIZING[str(st.session_state["f_sizing"])] == "exposure"
-        st.number_input("Exposure (% of the capital)", 0.0, 500.0, step=5.0, key="f_exp_pct", disabled=not by_exposure, help="SPX-equivalent exposure of the calls at purchase, as a share of the capital.")
-        st.number_input("Premium (% of the capital)", 0.0, 99.0, step=5.0, key="f_call_pct", disabled=by_exposure, help="Premium spent, as a share of the capital.")
-        st.radio("Built", list(_BUILD_UNIT), key="f_build_unit", horizontal=True, help="The calls are bought in equal slots a week or a month apart, the money waiting in SPX and rotated slot by slot (scenario 4 draws the loan slot by slot). Each slot has its own expiry and is rolled on its own.")
-        weekly = _BUILD_UNIT[str(st.session_state["f_build_unit"])] == "week"
-        st.session_state["f_build_steps"] = int(min(int(st.session_state["f_build_steps"]), 104 if weekly else 24))
-        st.number_input("Steps (1 = all on the start day)", 1, 104 if weekly else 24, step=1, key="f_build_steps", help="Up to two years: 104 weekly or 24 monthly steps.")
+        by_exposure = _sleeve_block("f", sweep=False)
         st.markdown("**The loan**")
         st.radio("Interest at", list(_RATE_MODE), key="f_rate_mode", help="The investor's flat 5.5 %, or the 3-month LIBOR / Term SOFR of the day plus a spread. Simple interest ACT/360, capitalised daily.")
         fixed_rate = str(st.session_state["f_rate_mode"]) == "fixed rate"
         st.number_input("Flat rate (%)", 0.0, 30.0, step=0.25, key="f_rate", disabled=not fixed_rate)
         st.number_input("Spread over the base rate (bp)", 0.0, 500.0, step=5.0, key="f_spread", disabled=fixed_rate)
-        st.markdown("**The calls**")
-        _tenor_widget()
-        st.radio("Premium", list(_PREM_MODE), key="f_prem_mode", help="Fixed: every call costs this share of its notional, whatever the vol of the day, and is marked at the vol that share implies on its purchase day. Market: priced and marked at the tenor's implied vol of the day (Assumptions 19l).")
-        fixed_prem = str(st.session_state["f_prem_mode"]) == "fixed % of notional"
-        st.number_input("Premium (% of notional)", 1.0, 60.0, step=0.5, key="f_prem", disabled=not fixed_prem)
-        st.number_input("Tax on the profit at expiry (%)", 0.0, 90.0, step=1.0, key="f_tax", help="Taken off payoff − premium when positive, at every call expiry, scenarios 3, 4 and 5 alike; no loss carry-forward; no tax on the SPX.")
+        _calls_block("f", "Taken off payoff − premium when positive, at every call expiry, scenarios 3, 4 and 5 alike; no loss carry-forward; no tax on the SPX.")
+        st.markdown("**The scenarios' rules**")   # visible, in scenario order 2 → 3 → 4 (user, 2026-10-01)
+        st.radio("Scenario 2: the loan is", list(_REPAY), key="f_repay", help="The investor's note: 'the loan rolling up, then paid off' — repaid from SPX on the day the first call of the other scenarios expires (user's reading, 2026-09-29), or never (the NAV is net of it throughout).")
+        _rebalance_widget("f", by_exposure)
+        st.radio("Scenario 4 at a slot's expiry, the loan is", list(_REPAY4), key="f_repay4", help="Surplus (the note's 'rolling up, then paid off'): the slot's share of the loan is repaid from the call's proceeds, SPX sold for any shortfall, and only the cash left buys a new call — a worthless call ends its slot. Refilled from SPX: the same repayment, then the slot is refilled to its share of the portfolio by selling SPX; the sleeve lives on, unlevered. Never repaid: the after-tax proceeds buy SPX and every replacement call is bought on a new loan; the loan runs to the end and the LTV with it.")
         with st.expander("Advanced"):
             _wht_widget("On the dividends of the SPX held. Common to every page.")
             st.number_input("Lending value of the SPX (%)", 1.0, 100.0, step=5.0, key="f_lv", help="The most the bank lends against the SPX. LTV = loan ÷ lending value.")
             st.number_input("Lending value of the calls (%)", 0.0, 100.0, step=5.0, key="f_lv_calls")
             st.number_input("Margin call at LTV (%)", 1.0, 100.0, step=5.0, key="f_margin", help="The bank calls when the loan exceeds this share of the lending value (PLACEHOLDER 90 %, as on page 1). Flagged on the charts; no forced sale is modelled.")
-            st.radio("Scenario 2: the loan is", list(_REPAY), key="f_repay", help="The investor's note: 'the loan rolling up, then paid off' — repaid from SPX on the day the first call of the other scenarios expires (user's reading, 2026-09-29), or never (the NAV is net of it throughout).")
-            st.radio("Scenario 4 at a slot's expiry, the loan is", list(_REPAY4), key="f_repay4", help="Surplus (the note's 'rolling up, then paid off'): the slot's share of the loan is repaid from the call's proceeds, SPX sold for any shortfall, and only the cash left buys a new call — a worthless call ends its slot. Refilled from SPX: the same repayment, then the slot is refilled to its share of the portfolio by selling SPX; the sleeve lives on, unlevered. Never repaid: the after-tax proceeds buy SPX and every replacement call is bought on a new loan; the loan runs to the end and the LTV with it.")
-            if by_exposure:
-                st.session_state["f_rebalance"] = next(iter(_REBAL))
-            st.radio("Scenario 3 at a slot's expiry, refill from:", list(_REBAL), key="f_rebalance", disabled=by_exposure, help="The user's reading (2026-09-29): the slot is refilled to its share of the whole portfolio, SPX sold when the call expired worthless and bought when it paid. The literal alternative splits only the after-tax proceeds (premium sizing only).")
         st.caption("Historical data only, September 1997 to today; every start is held to the last data day.")
     _remember("f_capital", "f_call_pct", "f_loan_pct", "f_rate_mode", "f_rate", "f_spread", "s_tenor", "f_prem_mode", "f_prem", "f_tax", "s_wht", "f_lv", "f_lv_calls", "f_margin", "f_repay", "f_repay4", "f_rebalance",
               "f_sizing", "f_exp_pct", "f_build_unit", "f_build_steps")
@@ -274,6 +320,84 @@ def scenarios_cached(start: str, end: str, s: ScenarioSetup) -> tuple[dict[str, 
     return fsc.simulate_scenarios(start, end, capital=s.capital, loan_frac=s.loan_frac, call_frac=s.call_frac, loan_rate=s.loan_rate, spread=s.spread, premium=s.premium,
                                   tenor=s.tenor, tax_rate=s.tax_rate, tax_on=s.tax_on, lv_equity=s.lv_equity, lv_calls=s.lv_calls, margin_call=s.margin_call, wht=s.wht,
                                   repay=s.repay, repay_calls=s.repay_calls, rebalance=s.rebalance, sizing=s.sizing, exposure_frac=s.exposure_frac, build_steps=s.build_steps, build_unit=s.build_unit)
+
+
+@dataclass(frozen=True)
+class SweepSetup:
+    """Page 4's inputs: scenario 3 alone, the size of its call sleeve swept."""
+    capital: float               # USD
+    sizing: str                  # "premium" | "exposure": which share is swept
+    shares: tuple[float, ...]    # the grid of shares (fractions of the capital), 0 first; empty when the range in the sidebar is invalid
+    premium: float | None        # premium as a fraction of notional; None = the market's vol of the day
+    tax_rate: float              # fraction of the call's profit taken off at expiry
+    tenor: float                 # years (shared)
+    wht: float                   # fraction (shared)
+    rebalance: str               # scenario 3 at expiry: "portfolio" | "proceeds"
+    build_steps: int             # the calls bought in this many steps (1 = one shot)
+    build_unit: str              # "week" | "month" between steps
+
+
+def sweep_sidebar() -> SweepSetup:
+    """Page 4's sidebar: the page-3 inputs that bear on scenario 3 (its own keys, page 3's defaults) and the swept range. Read back with ``sweep_setup``."""
+    for k, v in {**_SCEN_DEFAULTS, **_SWEEP_DEFAULTS}.items():
+        _restore(f"c_{k}", v)
+    with st.sidebar:
+        st.caption("Separate exercise — scenario 3 of the five scenarios alone, the size of its call sleeve swept. Its inputs are its own (page 3's defaults); the tenor and the withholding tax are shared with every page.")
+        _capital_widget("c", "Scenario 3 holds it in SPX less the premium spent on the call sleeve.")
+        by_exposure = _sleeve_block("c", sweep=True)
+        _calls_block("c", "Taken off payoff − premium when positive, at every call expiry; no loss carry-forward; no tax on the SPX.")
+        st.markdown("**Scenario 3's rule**")
+        _rebalance_widget("c", by_exposure)
+        with st.expander("Advanced"):
+            _wht_widget("On the dividends of the SPX held. Common to every page.")
+        st.caption("Historical data only, September 1997 to today; every start is held to the last data day.")
+    _remember(*(f"c_{k}" for k in {**_SCEN_DEFAULTS, **_SWEEP_DEFAULTS}), "s_tenor", "s_wht")
+    return sweep_setup()
+
+
+def sweep_setup() -> SweepSetup:
+    """The SweepSetup the sidebar widgets currently show; ``shares`` is empty when the swept range is invalid (the page says so)."""
+    s = st.session_state
+    sizing = _SIZING[str(s["c_sizing"])]
+    name = "prem" if sizing == "premium" else "exp"
+    lo, hi, step = (float(s[f"c_{name}_{k}"]) / 100.0 for k in ("from", "to", "step"))
+    valid = step > 0.0 and 0.0 <= lo <= hi and (sizing == "exposure" or hi < 1.0)
+    shares = css.share_grid(lo, hi, step) if valid else ()
+    return SweepSetup(float(s["c_capital"]) * M, sizing, shares, float(s["c_prem"]) / 100.0 if _PREM_MODE[str(s["c_prem_mode"])] == "fixed" else None,
+                      float(s["c_tax"]) / 100.0, float(s["s_tenor"]), float(s["s_wht"]) / 100.0, _REBAL[str(s["c_rebalance"])], int(s["c_build_steps"]), _BUILD_UNIT[str(s["c_build_unit"])])
+
+
+def sweep_kwargs(s: SweepSetup) -> dict[str, object]:
+    """The sweep setup as ``simulate_scenarios`` keyword arguments (the loan, lending values and margin call are irrelevant to scenario 3)."""
+    return {"capital": s.capital, "premium": s.premium, "tenor": s.tenor, "tax_rate": s.tax_rate, "tax_on": ("3", "4", "5"), "wht": s.wht,
+            "rebalance": s.rebalance, "build_steps": s.build_steps, "build_unit": s.build_unit}
+
+
+@st.cache_data(show_spinner=False)
+def sweep_cached(start: str, end: str, s: SweepSetup) -> pd.DataFrame:
+    """Scenario 3 from ``start`` to ``end`` at every share of the setup: one summary row per share; a progress bar the first time."""
+    bar = st.progress(0.0, text=f"Sweeping {len(s.shares)} call shares from {start} …")
+
+    def _p(i: int, n: int) -> None:
+        bar.progress(i / n, text=f"Sweeping call share {i} of {n} from {start} …")
+
+    out = css.sweep_call_share(start, end, s.shares, s.sizing, progress=_p, **sweep_kwargs(s))
+    bar.empty()
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def sweep_grid_cached(end: str, s: SweepSetup) -> pd.DataFrame:
+    """Scenario 3 from every month-end start (``call_share_sweep.month_end_starts``) at every share: the long table; a progress bar the first time."""
+    starts = css.month_end_starts(end, s.tenor, s.build_steps, s.build_unit)
+    bar = st.progress(0.0, text=f"Sweeping {len(starts)} month-end starts × {len(s.shares)} shares …")
+
+    def _p(i: int, n: int) -> None:
+        bar.progress(i / n, text=f"Run {i:,} of {n:,} ({len(starts)} starts × {len(s.shares)} shares) …")
+
+    out = css.sweep_grid(starts, end, s.shares, s.sizing, progress=_p, **sweep_kwargs(s))
+    bar.empty()
+    return out
 
 
 def data_bounds() -> tuple[pd.Timestamp, pd.Timestamp]:
