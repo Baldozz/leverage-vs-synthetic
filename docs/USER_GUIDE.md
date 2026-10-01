@@ -52,21 +52,20 @@ the notes at the foot of the page. The sidebar holds the capital, the loan share
 alike), the tenor; then, visible under *The scenarios' rules* in scenario order, the three readings of the investor's note (scenario 2's loan
 repaid after one tenor or never; scenario 3 refilling a slot from the whole portfolio or only from the proceeds — the latter under premium sizing
 only; scenario 4 at a slot's expiry — the loan share repaid and only the surplus in new calls, repaid and the slot refilled from SPX, or never
-repaid with every new call on a new loan); under *Advanced* the lending values and the call level and the withholding tax.
-*Download every start's daily paths as CSV* writes every (start, scenario, day). Nothing is sold on a margin call: it is flagged, not acted on.
+repaid with every new call on a new loan); under *Advanced* the lending values and the call level, what happens on a margin call (flagged, or a forced sale to a target LTV) and the withholding tax.
+*Download every start's daily paths as CSV* writes every (start, scenario, day). On a margin call the page's default is to sell SPX that day (*On a margin call*, in the rules section; "flagged, nothing sold" is the alternative) — the calls, then the cash, if the SPX runs out — until the LTV is back at the *LTV after the sale* (50 % by default); the table then shows what was sold.
 
 ### Page 4 — Call-share sweep
-Page 3's scenario 3 (SPX + a sleeve of rolling calls) alone, with the size of its call sleeve swept: 0 % (the long portfolio exactly, drawn as a
-diamond), then the sidebar's range — 5 → 50 % of the capital in premium in steps of 5 % by default (*from / to / step*; under exposure sizing
+Page 3's scenario 3 (SPX + a sleeve of rolling calls) alone, with the size of its call sleeve swept: 0 % (the long portfolio exactly), then the sidebar's range — 5 → 95 % of the capital in premium in steps of 5 % by default (*from / to / step*; under exposure sizing
 the exposure share, 10 → 100 % step 10). *Starts*: the five named starts run as the sidebar changes (a few seconds); *every month-end start* runs
 on the **Launch** button (the last trading day of each month up to the last start whose whole build has reached its first expiry, about twenty
-minutes the first time, then cached). The page shows the risk–return frontier (annualised volatility across, annualised return up, one curve per
-start, the points labelled by the share — up and to the left is better), the measures against the share (return, volatility, max drawdown, 1-day
-VaR and CVaR at 99 %, Sharpe ratio), and a table per start × share; in month-end mode also the annualised return as a 3-D surface over (start
-date, call share) or a heatmap (toggle), the median and 5th–95th percentile bands across the starts at each share with the named starts drawn
-thin on top, and an across-starts table (median return, its 5th–95th, median volatility and Sharpe, the worst max drawdown, the share of starts on
-which the mix beats the long portfolio). The sidebar carries page 3's inputs that bear on scenario 3 under its own keys (page 3's settings are
-untouched): capital, sizing and the swept range, the build, the premium, the tax, scenario 3's refill rule, the tenor and the withholding tax.
+minutes the first time, then cached). The page shows one heat map per start — six rows, the historical annualised return, the annualised volatility, the max drawdown, the Sharpe ratio,
+the 1-day VaR 95 % and the 1-day CVaR 95 %, each on its own colour scale; one column per composition, SPX exposure / call exposure from 100/0 to
+5/95; the value written in each cell; the best composition framed and starred (the highest return among those whose CVaR 95 % is at most the
+*CVaR 95 % budget* above pure SPX's) — and a table per start × composition with the same numbers; in month-end mode one more heat map with the
+median across the starts, and an across-starts table (median return and its 5th–95th, median volatility, Sharpe and CVaR, the worst max drawdown,
+the share of starts on which the mix beats the long portfolio). The sidebar carries only the swept range and the CVaR budget: every other assumption is page 3's, set on page 3's sidebar and shown
+here as text, so that the two pages' numbers agree.
 *Download the sweep as CSV* writes every (start, share) row with the whole summary of the run. Every explanation is in the notes at the foot.
 
 ## Supporting apps (strategy simulator, kept for reference)

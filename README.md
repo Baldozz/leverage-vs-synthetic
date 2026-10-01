@@ -62,31 +62,29 @@ trip, Black-76 equivalence for q = r).
 650 m, five ways to hold it, each on one historical path from a start date to today. There is no 1 bn portfolio, no 250 m loan, no delta-sized
 rotation, no roll matching and no band: every rule is the investor's own, kept as simple as written, so that the page can be read without Part 1.
 The five ways, from five start dates (the data start, the dot-com peak of 24 Mar 2000 and bottom of 9 Oct 2002, the GFC peak of 9 Oct 2007 and bottom of 9 Mar 2009; another can be added):
-**1** long the market; **2** levered long (812.5 m in SPX − a 162.5 m loan at a flat 5.5 %, interest capitalised, repaid from SPX after 5 years);
+**1** long the market; **2** levered long (812.5 m in SPX − a 162.5 m loan at a flat 5.5 %, interest capitalised, rolled up to the end — the page's default since 1 October 2026; repaid from SPX after 5 years as an option);
 **3** SPX + a sleeve of rolling 5-year ATM calls on SPXFP; **4** long the market + the same sleeve bought on a loan; **5** everything in calls.
 **The sleeve** (decisions of 30 Sep 2026): sized by *premium* — 25 % of the capital, the note's 162.5 m on 1,120 m of notional, every call costing
 14.5 % of notional — or, as an option, by *exposure* (a % of the capital in SPX-equivalent, the model delta × the notional, the premium following);
 *built over time* in 52 weekly slots (monthly, or 1 shot, up to two years), the money waiting
 in SPX and rotated slot by slot (scenario 4 draws the loan slot by slot, scenario 5 sells an equal share of its SPX at each step); each slot has its
 own expiry. At a slot's expiry 24 % of the profit is paid as tax (every call scenario alike), then: **3** refills the slot to its share of the whole
-portfolio, SPX sold or bought for the difference; **4** repays the slot's share of the loan from the proceeds (SPX sold for any shortfall) and puts
-the rest in new calls, no new loan; **5** rolls the slot's after-tax payoff, a worthless slot lapses and the last one lapsing with nothing left ends it.
+portfolio, SPX sold or bought for the difference; **4** never repays its loan and buys every replacement call on a new loan (the page's default since 1 October 2026; repaying the slot's share of the loan from the proceeds, with only the surplus in new calls, or with the slot refilled from SPX, as options); **5** rolls the slot's after-tax payoff, a worthless slot lapses and the last one lapsing with nothing left ends it.
 The page lists its departures from the note in its notes (the build over a year, scenario 5 taxed, scenario 3 refilled from the whole portfolio, the model's delta). It (`app/views/five_scenarios.py`) shows an overview table (NAV today and the annualised return per start and scenario, margin calls and
 wipe-outs flagged), then per start a chart with three rows — the five NAVs with the slot expiries, the loan repayment, the build band and any
 margin call marked; the SPX-equivalent exposure of each scenario (SPX + the calls' dollar delta); the LTV of the two levered scenarios against the
 call level — and a short table of the run (NAV and return, low, max drawdown, volatility, 1-day VaR / CVaR at 95 and 99 % and a Sharpe-like ratio against the 3-month T-bill — all on the scenario's own daily NAV returns — exposure today, margin call, loan repaid, calls expired, premiums, payoffs, tax,
 interest, holdings); a CSV of every daily path; every explanation in the notes at the foot of the page. Its own sidebar: capital, loan share, the sleeve (sized by exposure or premium, the %, the build's
 step and count), the rate (flat or base + spread), the premium (fixed or the market's), the tax (every call scenario alike), the tenor, the readings of the note
-in scenario order, visible (scenario 2's loan repaid or rolled up; scenario 3's refill; scenario 4 at a slot's expiry: the loan share repaid and only the surplus in new calls, repaid and the slot refilled from SPX, or never repaid with every new call on a new loan), and under Advanced the lending values, the call level and the withholding tax. Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
+in scenario order, visible (scenario 2's loan repaid or rolled up; scenario 3's refill; scenario 4 at a slot's expiry: the loan share repaid and only the surplus in new calls, repaid and the slot refilled from SPX, or never repaid with every new call on a new loan), and under Advanced the lending values, the call level, what happens on a margin call (SPX — then calls, then cash — sold that day to bring the LTV back to a target, 50 % by default; or flagged only) and the withholding tax. Engine `src/fosim/analytics/five_scenarios.py` (`simulate_scenarios` with the daily accounting identity, `default_starts`,
 `summary` with the risk measures, `paths_table`), tests `tests/test_five_scenarios.py` and the page test in `tests/test_app.py`, formulas `docs/METHODOLOGY.md` §10,
 choices `docs/ASSUMPTIONS.md` 40, limits `docs/LIMITATIONS.md` 18. Everything in Part 1 (engine, pages, tests, docs) is untouched by it.
 
 **Page 4, Call-share sweep** (`app/views/call_share_sweep.py`, added 1 October 2026): scenario 3 alone — SPX plus the sleeve — with the share of the capital in calls swept, 0 % (the long
-portfolio exactly) then 5 → 50 % in steps of 5 % by default (editable; under exposure sizing the exposure share), everything else fixed. From the five named starts (interactive):
-the risk–return frontier of each start with the points labelled by the share, the measures against the share (return, volatility, max drawdown, 1-day VaR / CVaR 99 %, Sharpe),
-a table per start × share. From every month-end start (Launch button, ≈ 276 starts, ≈ 20 minutes, cached): the annualised return as a 3-D surface over (start, share) or a heatmap,
-the 5–50–95 % bands across the starts and an across-starts table (incl. the share of starts on which a mix beats the long portfolio). Own sidebar keys with page 3's defaults; the
-tenor and the withholding tax shared. Engine `src/fosim/analytics/call_share_sweep.py` (`sweep_call_share`, `month_end_starts`, `sweep_grid`, `surface_table`, `grid_bands`, over
+portfolio exactly) then 5 → 95 % in steps of 5 % by default (editable; under exposure sizing the exposure share), everything else fixed. From the five named starts (interactive):
+one heat map per start — rows the historical annualised return, volatility, max drawdown, Sharpe ratio, 1-day VaR 95 % and 1-day CVaR 95 %, columns the composition (SPX exposure / call exposure, 100/0 … 5/95), the value in each cell, the best composition within a CVaR budget starred —
+a table per start × share. From every month-end start (Launch button, ≈ 276 starts, ≈ 20 minutes, cached): one more heat map with the median across the starts
+and an across-starts table (incl. the share of starts on which a mix beats the long portfolio). Its sidebar holds the swept range and the CVaR budget only; every other assumption is page 3's. Engine `src/fosim/analytics/call_share_sweep.py` (`sweep_call_share`, `best_share`, `month_end_starts`, `sweep_grid`, `surface_table`, `grid_bands`, over
 `simulate_scenarios(..., scenarios=("3",))`), tests `tests/test_call_share_sweep.py` and the page test in `tests/test_app.py`, formulas `docs/METHODOLOGY.md` §10, choices
 `docs/ASSUMPTIONS.md` 41, limits `docs/LIMITATIONS.md` 19.
 

@@ -13,6 +13,7 @@ from fosim.analytics.five_scenarios import (
     SUMMARY_ROWS,
     daily_returns,
     default_starts,
+    liquidation_sales,
     paths_table,
     risk_measures,
     simulate_scenarios,
@@ -237,6 +238,49 @@ def test_risk_measures_closed_forms(tmp_path: Path) -> None:
             assert sm.loc["Sharpe ratio", sid] == pytest.approx((sm.loc["annualised return", sid] - sm.loc["T-bill average", sid]) / sm.loc["volatility", sid], rel=1e-12)
         _identity(paths[sid])
     assert sm.loc["volatility", "3"] > 0.0 and np.isfinite(sm.loc["Sharpe ratio", "3"])   # the calls' mark moves: scenario 3 has a volatility
+
+
+def test_forced_liquidation_on_a_margin_call(tmp_path: Path) -> None:
+    """``on_call="liquidate"``: on the day the loan exceeds m × the lending value, SPX is sold and paid into the loan until LTV = the target;
+    the calls at their mark when the SPX runs out, then the cash (``liquidation_sales`` closed forms for the three stages); the sale is NAV-neutral
+    (the identity holds), the day counts as a margin call, the record carries what was sold and the LTV before and after."""
+    # the pure sales function: (loan − s) = t·(ℓ_E·(E − s) + ℓ_C·calls + ℓ_T·cash) stage by stage
+    t, lE, lC, lT = 0.5, 0.75, 0.0, 0.9
+    s, x, p = liquidation_sales(1000.0, 200.0, 50.0, 800.0, lE, lC, lT, t)
+    assert s == pytest.approx((800.0 - t * (lE * 1000.0 + lT * 50.0)) / (1.0 - t * lE)) and x == 0.0 and p == 0.0 and (800.0 - s) / (lE * (1000.0 - s) + lT * 50.0) == pytest.approx(t)
+    s, x, p = liquidation_sales(100.0, 1000.0, 50.0, 500.0, lE, 0.2, lT, t)   # the SPX runs out: all of it, then calls (lending value 20 %)
+    assert s == 100.0 and x == pytest.approx((400.0 - t * (0.2 * 1000.0 + lT * 50.0)) / (1.0 - t * 0.2)) and p == 0.0 and (400.0 - x) / (0.2 * (1000.0 - x) + lT * 50.0) == pytest.approx(t)
+    s, x, p = liquidation_sales(100.0, 100.0, 400.0, 500.0, lE, lC, lT, t)   # SPX and calls gone, then the cash
+    assert (s, x) == (100.0, 100.0) and p == pytest.approx((300.0 - t * lT * 400.0) / (1.0 - t * lT)) and (300.0 - p) / (lT * (400.0 - p)) == pytest.approx(t)
+    assert liquidation_sales(10.0, 10.0, 10.0, 500.0, lE, lC, lT, t) == (10.0, 10.0, 10.0)   # nothing is enough: everything sold, the loan stays
+    assert liquidation_sales(1000.0, 0.0, 0.0, 100.0, lE, lC, lT, t) == (0.0, 0.0, 0.0)      # already inside the target
+    # scenario 2 on a path falling to a fifth: the first call day, the SPX sold = the closed form, LTV = the target after it, no call the next day
+    spx = np.concatenate([np.linspace(100.0, 20.0, 200), np.full(100, 20.0)])
+    f = _file(tmp_path, spx)
+    flag, fi = simulate_scenarios("2010-01-04", "2011-02-25", tenor=1.0, file=f, **OLD)
+    liq, li = simulate_scenarios("2010-01-04", "2011-02-25", tenor=1.0, file=f, on_call="liquidate", ltv_after_call=0.5, **OLD)
+    p2, i2 = liq["2"], li["2"]
+    first = fi["2"].margin_call_first
+    assert first is not None and i2.margin_call_first == first and len(i2.liquidations) >= 1 and i2.liquidations[0].date == first
+    k = int(p2.index.get_loc(first))
+    e_pre, loan_pre = flag["2"]["E"].iloc[k], flag["2"]["loan"].iloc[k]   # the day's state before the sale = the flagged run's (identical until then)
+    assert np.allclose(p2["nav"].to_numpy()[:k + 1], flag["2"]["nav"].to_numpy()[:k + 1], rtol=1e-12)
+    s_exp = (loan_pre - 0.5 * 0.75 * e_pre) / (1.0 - 0.5 * 0.75)
+    l0 = i2.liquidations[0]
+    assert l0.spx_sold == pytest.approx(s_exp, rel=1e-9) and l0.calls_sold == 0.0 and l0.cash_used == 0.0 and l0.ltv_after == pytest.approx(0.5, abs=1e-9) and l0.ltv_before == pytest.approx(loan_pre / (0.75 * e_pre))
+    assert p2["E"].iloc[k] == pytest.approx(e_pre - s_exp) and p2["loan"].iloc[k] == pytest.approx(loan_pre - s_exp) and p2["ltv"].iloc[k] == pytest.approx(0.5) and p2["liquidated"].iloc[k] == pytest.approx(s_exp)
+    assert p2["spx_traded"].iloc[k] == pytest.approx(-s_exp) and bool(p2["margin_call"].iloc[k]) and p2["nav"].iloc[k] == pytest.approx(flag["2"]["nav"].iloc[k])   # NAV-neutral, the day in call
+    assert i2.days_in_margin_call == len(i2.liquidations) + int(((p2["loan"] > 0.9 * p2["lending_value"]) & ~p2["liquidated"].gt(0)).sum())
+    assert (p2["ltv"].to_numpy()[k:] <= 0.9 + 1e-9).all() and sum(lq.spx_sold + lq.calls_sold + lq.cash_used for lq in i2.liquidations) == pytest.approx(p2["liquidated"].sum())
+    sm = summary(liq, li)
+    assert sm.loc["liquidations", "2"] == len(i2.liquidations) and sm.loc["sold on margin calls", "2"] == pytest.approx(p2["liquidated"].sum()) and sm.loc["liquidations", "1"] == 0
+    assert list(sm.index) == list(SUMMARY_ROWS)
+    for sid in SCENARIOS:
+        _identity(liq[sid])
+    assert np.allclose(liq["1"]["nav"], flag["1"]["nav"]) and np.allclose(liq["3"]["nav"], flag["3"]["nav"])   # the unlevered scenarios untouched
+    for kw in ({"on_call": "sell"}, {"on_call": "liquidate", "ltv_after_call": 0.95}, {"on_call": "liquidate", "ltv_after_call": 0.0}):
+        with pytest.raises(ValueError):
+            simulate_scenarios("2010-01-04", "2011-02-25", tenor=1.0, file=f, **kw)  # type: ignore[arg-type]
 
 
 def test_fixed_premium_marks_and_market_mode(tmp_path: Path) -> None:

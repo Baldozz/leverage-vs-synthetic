@@ -41,10 +41,10 @@ def share_grid(lo: float, hi: float, step: float) -> tuple[float, ...]:
 
 
 def default_shares(sizing: str) -> tuple[float, ...]:
-    """The page's default grid: 5 → 50 % of the capital in premium in steps of 5 %, or 10 → 100 % in exposure in steps of 10 %."""
+    """The page's default grid: 5 → 95 % of the capital in premium in steps of 5 %, or 10 → 100 % in exposure in steps of 10 %."""
     if sizing not in SIZING:
         raise ValueError(f"sizing must be one of {SIZING}")
-    return share_grid(0.05, 0.50, 0.05) if sizing == "premium" else share_grid(0.10, 1.00, 0.10)
+    return share_grid(0.05, 0.95, 0.05) if sizing == "premium" else share_grid(0.10, 1.00, 0.10)
 
 
 def sweep_call_share(start: str | pd.Timestamp, end: str | pd.Timestamp, shares: Sequence[float], sizing: str = "premium",
@@ -103,6 +103,26 @@ def sweep_grid(starts: Sequence[pd.Timestamp] | pd.DatetimeIndex, end: str | pd.
         f.insert(0, "start", s0)
         frames.append(f)
     return pd.concat(frames, ignore_index=True)
+
+
+LOSS_MEASURES = ("VaR 95 %", "VaR 99 %", "CVaR 95 %", "CVaR 99 %", "max drawdown")   # 1-day losses (positive) and the drawdown (negated)
+
+
+def best_share(df: pd.DataFrame, budget: float, measure: str = "CVaR 95 %") -> float:
+    """The share with the highest annualised return among those whose loss ``measure`` (the 1-day CVaR 95 % by default; the max drawdown
+    read as a positive loss) exceeds the first share's (0 %, the long portfolio) by at most ``budget`` (a fraction of the NAV, e.g. 0.01 =
+    1 point); the smallest such share on a tie; share 0 when the long portfolio's value is undefined. ``df`` as ``sweep_call_share`` returns it."""
+    if budget < 0.0 or df.empty or measure not in LOSS_MEASURES:
+        raise ValueError(f"budget must be non-negative, the sweep non-empty and the measure one of {LOSS_MEASURES}")
+    loss = df[measure].astype(float).to_numpy()
+    if measure == "max drawdown":
+        loss = -loss
+    if not np.isfinite(loss[0]):
+        return float(df.index[0])
+    g = df["annualised return"].astype(float).to_numpy()
+    ok = np.isfinite(loss) & (loss <= loss[0] + budget + 1e-12)
+    cand = np.where(ok, g, -np.inf)
+    return float(df.index[int(np.argmax(cand))])
 
 
 def surface_table(long: pd.DataFrame, measure: str) -> pd.DataFrame:

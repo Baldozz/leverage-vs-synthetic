@@ -41,6 +41,9 @@ def named_starts() -> dict[str, pd.Timestamp]:
 
 
 s = scenario_setup()
+if s.on_call == "liquidate" and s.ltv_after_call >= s.margin_call:
+    st.error("The LTV after a forced sale must be below the margin-call level (sidebar, Advanced).")
+    st.stop()
 first_day, last_day = data_bounds()
 corr = corrections_cached(0.20, 0.15, "price")
 spx_px = lvs._load(str(lvs.DAILY_FILE)).set_index("date")["spx_px_last"]
@@ -147,6 +150,9 @@ def fmt_row(sm: pd.DataFrame, row: str, sid: str, info: fsc.ScenarioInfo) -> str
         first = sm.loc["margin call first on", sid]
         if pd.isna(first):
             return f"none, LTV up to {sm.loc['max LTV', sid]:.0%}"
+        if info.liquidations:   # the forced sale: the LTV the bank saw, what was sold (every sale), where the LTV was brought back
+            l0 = info.liquidations[0]
+            return f"⚠ {first:%d %b %Y}, LTV {l0.ltv_before:.0%} → sold {sm.loc['sold on margin calls', sid] / M:,.0f} m, LTV {l0.ltv_after:.0%}" + (f", {len(info.liquidations)} sales" if len(info.liquidations) > 1 else "")
         return f"⚠ {first:%d %b %Y}, LTV {sm.loc['LTV at the first margin call', sid]:.0%}, {sm.loc['days in margin call', sid]} days"
     if row == "loan repaid":
         if sid not in fsc.LEVERED:
@@ -233,14 +239,16 @@ for lab, d in runs:
             ltv = p["ltv"] * 100.0
             fig.add_trace(go.Scatter(x=ltv.index, y=ltv, name=f"{NAMES[sid]}: LTV", line={"color": colr, "width": 2}, legendgroup=sid, showlegend=False,
                                      hovertemplate="%{x|%d %b %Y}<br>%{fullData.name} %{y:.0f} %<extra></extra>"), row=3, col=1)
-            if info.margin_call_first is not None:   # the margin call: a red ✕ on the first day, the days in call shaded, a label
+            if info.margin_call_first is not None:   # the margin call: a red ✕ on the first day, the days in call shaded, a label (and the forced sale, if any)
                 first = info.margin_call_first
+                ltv_seen = info.liquidations[0].ltv_before if info.liquidations else float(p["ltv"].loc[first])
+                sale_txt = f" — sold {sum(lq.spx_sold + lq.calls_sold + lq.cash_used for lq in info.liquidations) / M:,.0f} m → LTV {info.liquidations[0].ltv_after:.0%}" if info.liquidations else ""
                 for a, b in spans(p["margin_call"]):
                     fig.add_vrect(x0=a, x1=b + pd.DateOffset(days=1), fillcolor="rgba(192, 0, 0, 0.12)", line_width=0, row="all", col=1)
                 fig.add_trace(go.Scatter(x=[first], y=[nav.loc[first]], mode="markers", name=f"{sid}: margin call", legendgroup=sid, showlegend=False,
                                          marker={"symbol": "x", "size": 13, "color": CALL_RED, "line": {"color": "white", "width": 1}},
-                                         hovertemplate=f"{NAMES[sid]}: margin call on %{{x|%d %b %Y}}, LTV {float(p['ltv'].loc[first]):.0%}, {info.days_in_margin_call} days in call<extra></extra>"), row=1, col=1)
-                fig.add_annotation(x=first, y=nav.loc[first], text=f"<b>⚠ {sid} margin call</b> {first:%d %b %Y} — LTV {float(p['ltv'].loc[first]):.0%}", showarrow=True, arrowhead=2, arrowcolor=CALL_RED,
+                                         hovertemplate=f"{NAMES[sid]}: margin call on %{{x|%d %b %Y}}, LTV {ltv_seen:.0%}, {info.days_in_margin_call} days in call{sale_txt}<extra></extra>"), row=1, col=1)
+                fig.add_annotation(x=first, y=nav.loc[first], text=f"<b>⚠ {sid} margin call</b> {first:%d %b %Y} — LTV {ltv_seen:.0%}{sale_txt}", showarrow=True, arrowhead=2, arrowcolor=CALL_RED,
                                    ax=0, ay=-50 if sid == "2" else -90, font={"size": 11, "color": INK}, bgcolor="rgba(255, 255, 255, 0.92)", bordercolor=CALL_RED, borderwidth=1, row=1, col=1)
         fig.add_annotation(x=x_end, y=np.log10(label_y[sid]) if log_scale else label_y[sid], xref="x", yref="y", text=f"<span style='color:{colr}'>●</span> {sid}: {ends[sid]:,.0f} m", showarrow=False,
                            xanchor="left", xshift=6, font={"size": 11, "color": INK}, row=1, col=1)
@@ -301,7 +309,7 @@ st.caption(f"""**Setup** (the sidebar; Assumptions 40)
 {sleeve_lines}
 {build_line}
 - **Tax**: {s.tax_rate:.0%} of a call's profit (payoff − premium, when positive) at expiry, scenarios 3 and 4""" + (" and 5" if "5" in s.tax_on else "") + """; no loss carry-forward; no tax on the SPX.
-- **Margin call**: the loan above """ + f"{s.margin_call:.0%} of the lending value ({s.lv_equity:.0%} of the SPX, {s.lv_calls:.0%} of the calls); flagged (⚠, shaded days), nothing sold for it."
+- **Margin call**: the loan above """ + f"{s.margin_call:.0%} of the lending value ({s.lv_equity:.0%} of the SPX, {s.lv_calls:.0%} of the calls); " + ("flagged (⚠, shaded days), nothing sold for it." if s.on_call == "flag" else f"on the day of the call SPX is sold and the loan repaid until the LTV is back at {s.ltv_after_call:.0%} (the calls at their mark if the SPX runs out, then the cash); the day flagged (⚠).")
            + f"""
 - **SPX**: held with dividends reinvested, net of {s.wht:.0%} withholding.""")
 st.caption(f"""**The five scenarios**

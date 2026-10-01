@@ -20,7 +20,8 @@ SPX with dividends reinvested net of withholding (TR), the loan simple ACT/360 c
 (q = r = the tenor's Treasury of the day, ACT/365) at the vol implied by the fixed premium on the purchase day — or, with ``premium=None``, at
 the market's implied vol of the day; the dollar delta of the live calls (Σ units · δ(t) · S(t)) is reported every day and the SPX-equivalent
 exposure is SPX + dollar delta. Tax = rate × max(payoff − premium paid, 0) at expiry, no loss carry-forward. Margin call (2 and 4): the
-loan above ``margin_call`` × the lending value of the holdings; flagged, no forced sale. NAV = SPX + calls + cash − loan; the accounting
+loan above ``margin_call`` × the lending value of the holdings; flagged, no forced sale by default — or, with ``on_call="liquidate"``, SPX sold
+and the loan repaid that day until LTV = ``ltv_after_call`` (the calls sold at their mark when the SPX runs out, then the cash). NAV = SPX + calls + cash − loan; the accounting
 identity ΔNAV = ΔSPX + Δcalls + cash interest − loan interest − tax is asserted every day for every scenario. ``summary`` adds each path's
 risk measures on its own daily NAV returns: volatility, 1-day historical VaR/CVaR at 95 and 99 %, max drawdown and its day, and a Sharpe-like
 ratio against the 3-month T-bill averaged over the holding period.
@@ -58,6 +59,22 @@ REPAY_CALLS = ("surplus", "refill_spx", "reborrow")   # scenario 4 at a slot's e
 REBALANCE = ("portfolio", "proceeds")  # scenario 3 at expiry: the slot refilled to its share of the portfolio, or the after-tax proceeds split (1 − κ)/κ
 SIZING = ("exposure", "premium")       # the call sleeve: X of the capital in SPX-equivalent exposure, or κ of the capital in premium
 BUILD_UNITS = ("week", "month")        # the build steps 7 calendar days or one calendar month apart
+ON_CALL = ("flag", "liquidate")        # a margin call: flagged only, or SPX (then calls, then cash) sold to bring the LTV back to ltv_after_call
+
+
+def liquidation_sales(e: float, calls: float, cash: float, loan: float, lv_e: float, lv_c: float, lv_t: float, target: float) -> tuple[float, float, float]:
+    """USD of SPX, then of calls, then of cash sold at the mark and paid into the loan until loan ÷ lending value ≤ ``target``: each stage
+    solves (loan − s) = target · (lending value − ℓ·s) for its asset, capped at what is held; the next stage only when the asset runs out."""
+    s = (loan - target * (lv_e * e + lv_c * calls + lv_t * cash)) / (1.0 - target * lv_e)
+    if s <= e:
+        return max(s, 0.0), 0.0, 0.0
+    loan -= e
+    x = (loan - target * (lv_c * calls + lv_t * cash)) / (1.0 - target * lv_c)
+    if x <= calls:
+        return e, max(x, 0.0), 0.0
+    loan -= calls
+    p = (loan - target * lv_t * cash) / (1.0 - target * lv_t)
+    return e, calls, min(max(p, 0.0), cash)
 
 
 @dataclass(frozen=True)
@@ -76,6 +93,17 @@ class Expiry:
     slot: int = 0            # the build step this tranche descends from (0-based)
     wiped_out: bool = False  # scenario 5: nothing left to reinvest anywhere
     loan_drawn: float = 0.0  # scenario 4 under "reborrow": the new call bought on a new loan
+
+
+@dataclass(frozen=True)
+class Liquidation:
+    """One forced sale on a margin call: the LTV before, what was sold (at the mark, paid into the loan), the LTV after."""
+    date: pd.Timestamp
+    ltv_before: float
+    spx_sold: float
+    calls_sold: float
+    cash_used: float
+    ltv_after: float
 
 
 @dataclass(frozen=True)
@@ -105,6 +133,7 @@ class ScenarioInfo:
     exposure_build: float    # SPX + dollar delta on the last build day
     build_end: pd.Timestamp  # the last build day
     n_tranches: int          # build steps taken (1 = one shot)
+    liquidations: tuple[Liquidation, ...] = ()   # the forced sales on margin calls (``on_call="liquidate"``)
 
 
 def simulate_scenarios(
@@ -113,10 +142,13 @@ def simulate_scenarios(
     tax_rate: float = 0.24, tax_on: tuple[str, ...] = ("3", "4", "5"), lv_equity: float = 0.75, lv_calls: float = 0.0, lv_cash: float = 0.90,
     margin_call: float = 0.90, wht: float = 0.15, repay: str = "tenor", repay_calls: str = "surplus", rebalance: str = "portfolio",
     sizing: str = "premium", exposure_frac: float = 0.86, build_steps: int = 52, build_unit: str = "week", file: Path | str | None = None,
-    scenarios: tuple[str, ...] = SCENARIOS,
+    scenarios: tuple[str, ...] = SCENARIOS, on_call: str = "flag", ltv_after_call: float = 0.5,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, ScenarioInfo]]:
     """Daily path of the five scenarios from ``start`` to ``end`` (nearest trading days). See the module docstring. ``scenarios``: the ids to
     run (all five by default; each scenario's path is independent of the others, so a subset is bit-identical to its columns in the full run).
+    ``on_call``: a margin call (2 and 4) ``"flag"`` — flagged, nothing sold (default) — or ``"liquidate"``: that day SPX is sold and the loan repaid
+    until loan ÷ lending value = ``ltv_after_call``, the calls sold at their mark (pro rata across the slots) when the SPX runs out, then the cash
+    (``liquidation_sales``); the day counts as a margin call, the sale is recorded in ``ScenarioInfo.liquidations`` and the ``liquidated`` column.
 
     ``loan_rate``: flat annual rate of the loans (0.055 default); ``None`` uses the 3-month base rate of the day + ``spread``.
     ``premium``: the call premium as a fraction of notional (0.145 default), the calls marked at the vol it implies on the purchase day;
@@ -155,6 +187,8 @@ def simulate_scenarios(
         raise ValueError("rebalance='proceeds' splits a premium budget: use it with sizing='premium'")
     if not scenarios or any(s not in SCENARIOS for s in scenarios):
         raise ValueError(f"scenarios must be a non-empty subset of {SCENARIOS}")
+    if on_call not in ON_CALL or (on_call == "liquidate" and not 0.0 < ltv_after_call < margin_call):
+        raise ValueError(f"on_call must be one of {ON_CALL}; ltv_after_call in (0, margin_call) when liquidating")
     full = _load(str(file or DAILY_FILE))
     rate_col, vol_col = tenor_columns(full, tenor)
     d = full.dropna(subset=["spxfp", "spx_px_last", "spx_div_yld", "loan_base", "tbill_3m", rate_col, vol_col]).reset_index(drop=True)
@@ -235,9 +269,25 @@ def simulate_scenarios(
         eq_pnl, call_pnl, cash_int, interest, tax_day, prem_day, pay_day, spx_traded = (np.zeros(n) for _ in range(8))
         is_expiry = np.zeros(n, dtype=bool)
         expiries: list[Expiry] = []
+        liquidations: list[Liquidation] = []
+        called = np.zeros(n, dtype=bool)          # the days of a forced sale: in margin call whatever the LTV after it
+        liq_day = np.zeros(n)                     # USD sold on a margin call that day (SPX + calls + cash paid into the loan)
         wiped_out_on: pd.Timestamp | None = None
         loan_repaid_on: pd.Timestamp | None = None
         premium_build = notional_build = loan_build = 0.0
+
+        def mark_path(t: Tranche) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """(days, price per unit, S × delta per unit) of a tranche from the day after its purchase to the day before its expiry."""
+            k_end = t.k_exp if t.k_exp > 0 else n
+            idx = np.arange(t.k_buy + 1, k_end)
+            if not idx.size:
+                return idx, np.zeros(0), np.zeros(0)
+            tau = (t.exp_date - dates[idx]).astype(float) / 365.0
+            vol = np.full(idx.size, t.sigma) if premium is not None else iv[idx]
+            strikes = np.full(idx.size, t.strike)
+            price = np.asarray(bsm_price(S[idx], strikes, r[idx], r[idx], vol, tau), dtype=np.float64)
+            dlt = S[idx] * np.asarray(bsm_greeks(S[idx], strikes, r[idx], r[idx], vol, tau).delta, dtype=np.float64)
+            return idx, price, dlt
 
         def buy(k: int, prem: float, slot: int, first_cycle: bool) -> Tranche:
             """Buy ``prem`` USD of ATM calls of the tenor on day k; the mark from the next day to the day before expiry."""
@@ -245,17 +295,27 @@ def simulate_scenarios(
             notional = prem / c
             e_date, k_e = expiry_of(k)
             t = Tranche(notional / S[k], S[k], e_date, k_e, sig, k, prem, slot, first_cycle)
-            k_end = k_e if k_e > 0 else n
-            idx = np.arange(k + 1, k_end)
-            if idx.size:
-                tau = (e_date - dates[idx]).astype(float) / 365.0
-                vol = np.full(idx.size, sig) if premium is not None else iv[idx]
-                strikes = np.full(idx.size, t.strike)
-                marks[idx] += t.units * np.asarray(bsm_price(S[idx], strikes, r[idx], r[idx], vol, tau), dtype=np.float64)
-                deltas[idx] += t.units * S[idx] * np.asarray(bsm_greeks(S[idx], strikes, r[idx], r[idx], vol, tau).delta, dtype=np.float64)
+            idx, price, dlt = mark_path(t)
+            marks[idx] += t.units * price
+            deltas[idx] += t.units * dlt
             deltas[k] += t.units * S[k] * dl
             prem_day[k] += prem
             return t
+
+        def sell_calls(k: int, frac: float) -> None:
+            """Sell the fraction ``frac`` of every live tranche at the day's mark: the units, the premium carried and the marks from today on scale down."""
+            _, _, dl = atm(k)
+            for t in tranches:
+                idx, price, dlt = mark_path(t)
+                m = idx >= k
+                marks[idx[m]] -= frac * t.units * price[m]
+                deltas[idx[m]] -= frac * t.units * dlt[m]
+                if t.k_buy == k:
+                    deltas[k] -= frac * t.units * S[k] * dl
+                t.units *= 1.0 - frac
+                t.premium *= 1.0 - frac
+            if frac >= 1.0 - 1e-12:
+                tranches.clear()
 
         def build_step(k: int, w: int) -> float:
             """Build step w on day k: one slot of premium bought, from SPX sold (3, 5) or a loan drawn (4). Returns the premium."""
@@ -390,6 +450,33 @@ def simulate_scenarios(
                 if loan <= TOL:
                     loan = 0.0
                     loan_repaid_on = date
+            if on_call == "liquidate" and sid in LEVERED and loan > 0.0:   # the forced sale: SPX, then the calls, then the cash, until LTV = ltv_after_call
+                calls_now = marks[k] + prem_today
+                lv_now = lv_equity * e_now + lv_calls * calls_now + lv_cash * cash
+                if loan > margin_call * lv_now + TOL:
+                    ltv_before = loan / lv_now if lv_now > 0.0 else np.inf
+                    s_, x_, p_ = liquidation_sales(e_now, calls_now, cash, loan, lv_equity, lv_calls, lv_cash, ltv_after_call)
+                    if s_ > 0.0:
+                        eq_units -= s_ / tr[k]
+                        e_now = eq_units * tr[k]
+                        spx_traded[k] -= s_
+                        loan -= s_
+                    if x_ > 0.0:
+                        frac = min(x_ / calls_now, 1.0)
+                        sell_calls(k, frac)
+                        prem_today *= 1.0 - frac
+                        loan -= x_
+                    if p_ > 0.0:
+                        cash -= p_
+                        loan -= p_
+                    if loan <= TOL:
+                        loan = 0.0
+                        if loan_repaid_on is None:
+                            loan_repaid_on = date
+                    lv_after = lv_equity * e_now + lv_calls * (marks[k] + prem_today) + lv_cash * cash
+                    called[k] = True
+                    liq_day[k] = s_ + x_ + p_
+                    liquidations.append(Liquidation(date, float(ltv_before), float(s_), float(x_), float(p_), float(loan / lv_after) if lv_after > 0.0 else (np.inf if loan > 0.0 else 0.0)))
             pay_day[k] = payoff_today
             book(k, prem_today)
             call_pnl[k] = marks_pre + payoff_today - call_val[k - 1]
@@ -404,7 +491,7 @@ def simulate_scenarios(
         with np.errstate(divide="ignore", invalid="ignore"):
             ltv = np.where(lending_value > 0.0, loan_arr / lending_value, np.where(loan_arr > 0.0, np.inf, 0.0)) if levered else np.full(n, np.nan)
         headroom = margin_call * lending_value - loan_arr if levered else np.full(n, np.nan)
-        in_call = (headroom < 0.0) if levered else np.zeros(n, dtype=bool)
+        in_call = ((headroom < 0.0) | called) if levered else np.zeros(n, dtype=bool)
         exposure = E + deltas
         out = pd.DataFrame({
             "spx_tr": tr, "spxfp": S, "E": E, "call_val": call_val, "call_notional": call_notional, "call_delta": deltas, "exposure": exposure, "n_calls": n_calls,
@@ -413,6 +500,7 @@ def simulate_scenarios(
             "interest": interest, "tax": tax_day, "eq_pnl": eq_pnl, "call_pnl": call_pnl, "cash_int": cash_int, "spx_traded": spx_traded, "expiry": is_expiry,
             "interest_cum": np.cumsum(interest), "tax_cum": np.cumsum(tax_day), "premiums_cum": np.cumsum(prem_day), "payoffs_cum": np.cumsum(pay_day),
             "tbill": tbill,   # the 3-month T-bill of the day (fraction): the cash leg's rate, and the Sharpe's risk-free rate in ``summary``
+            "liquidated": liq_day,
         }, index=pd.DatetimeIndex(d.date, name="date"))
         first_call = pd.Timestamp(out.index[int(np.argmax(in_call))]) if in_call.any() else None
         k_build_end = build_days[-1] if buys_calls else 0
@@ -420,7 +508,8 @@ def simulate_scenarios(
                             premium0, notional0, c0, dl0, sig0, tuple(expiries),
                             first_call, int(in_call.sum()), float(np.nanmax(ltv)) if levered else float("nan"), loan_repaid_on, wiped_out_on,
                             any(t.k_exp < 0 for t in tranches), rate_col, vol_col,
-                            premium_build, notional_build, float(exposure[k_build_end]), pd.Timestamp(dates[k_build_end]), len(build_days) if buys_calls else 0)
+                            premium_build, notional_build, float(exposure[k_build_end]), pd.Timestamp(dates[k_build_end]), len(build_days) if buys_calls else 0,
+                            liquidations=tuple(liquidations))
         return out, info
 
     paths: dict[str, pd.DataFrame] = {}
@@ -483,7 +572,7 @@ def risk_measures(nav: F64, ann_return: float, tbill_avg: float, steps_per_year:
 
 SUMMARY_ROWS = ("NAV today", "total return", "annualised return", "lowest NAV", "lowest NAV on", "max drawdown", "max drawdown on", "returns counted",
                 "volatility", "VaR 95 %", "CVaR 95 %", "VaR 99 %", "CVaR 99 %", "T-bill average", "Sharpe ratio", "margin call first on", "LTV at the first margin call",
-                "days in margin call", "max LTV", "loan repaid on", "build completed on", "premium paid in the build", "exposure at the end of the build",
+                "days in margin call", "liquidations", "sold on margin calls", "max LTV", "loan repaid on", "build completed on", "premium paid in the build", "exposure at the end of the build",
                 "calls expired", "expired worthless", "wiped out on", "premiums paid", "payoffs received", "tax paid",
                 "interest paid", "SPX bought at expiries", "SPX sold at expiries", "SPX today", "calls today", "calls alive today", "call notional today", "exposure today",
                 "cash today", "loan today", "last call not yet expired")
@@ -510,7 +599,7 @@ def summary(paths: dict[str, pd.DataFrame], infos: dict[str, ScenarioInfo]) -> p
             "returns counted": rm.n, "volatility": rm.volatility, "VaR 95 %": rm.var95, "CVaR 95 %": rm.cvar95, "VaR 99 %": rm.var99, "CVaR 99 %": rm.cvar99,
             "T-bill average": tbill_avg, "Sharpe ratio": rm.sharpe,
             "margin call first on": first if first is not None else pd.NaT, "LTV at the first margin call": float(p["ltv"].loc[first]) if first is not None else np.nan,
-            "days in margin call": info.days_in_margin_call, "max LTV": info.max_ltv, "loan repaid on": info.loan_repaid_on if info.loan_repaid_on is not None else pd.NaT,
+            "days in margin call": info.days_in_margin_call, "liquidations": len(info.liquidations), "sold on margin calls": float(p["liquidated"].sum()), "max LTV": info.max_ltv, "loan repaid on": info.loan_repaid_on if info.loan_repaid_on is not None else pd.NaT,
             "build completed on": info.build_end if info.n_tranches else pd.NaT, "premium paid in the build": info.premium_build, "exposure at the end of the build": info.exposure_build,
             "calls expired": len(info.expiries), "expired worthless": sum(1 for e in info.expiries if e.worthless), "wiped out on": info.wiped_out_on if info.wiped_out_on is not None else pd.NaT,
             "premiums paid": float(p["premiums_cum"].iloc[-1]), "payoffs received": float(p["payoffs_cum"].iloc[-1]), "tax paid": float(p["tax_cum"].iloc[-1]),

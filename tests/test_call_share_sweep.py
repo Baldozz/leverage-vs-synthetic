@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from fosim.analytics.call_share_sweep import (
+    best_share,
     default_shares,
     grid_bands,
     month_end_starts,
@@ -80,7 +81,7 @@ def test_zero_share_is_scenario_1_and_the_shares_are_what_was_asked(tmp_path: Pa
     _same(dx.loc[0.5], smx["3"])
     assert dx.loc[0.0, "volatility"] == 0.0 and np.isnan(dx.loc[0.0, "Sharpe ratio"]) and dx.loc[0.5, "volatility"] > 0.0 and np.isfinite(dx.loc[0.5, "Sharpe ratio"])   # a flat SPX: no risk without calls
     # the grid of shares: the anchor always first, hi always included, no float dust
-    assert share_grid(0.05, 0.50, 0.05) == (0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5) == default_shares("premium")
+    assert share_grid(0.05, 0.50, 0.05) == (0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5) and default_shares("premium") == share_grid(0.05, 0.95, 0.05) and len(default_shares("premium")) == 20
     assert share_grid(0.10, 1.00, 0.10) == tuple(np.round(np.arange(0.0, 1.05, 0.1), 10)) == default_shares("exposure") and len(default_shares("exposure")) == 11
     assert share_grid(0.0, 0.2, 0.1) == (0.0, 0.1, 0.2) and share_grid(0.3, 0.3, 0.1) == (0.0, 0.3)
     for lo, hi, step in ((0.1, 0.5, 0.0), (0.5, 0.1, 0.1), (-0.1, 0.5, 0.1)):
@@ -92,6 +93,27 @@ def test_zero_share_is_scenario_1_and_the_shares_are_what_was_asked(tmp_path: Pa
             sweep_call_share("2010-01-04", "2012-04-20", file=f, tenor=1.0, build_steps=1, **kw)   # type: ignore[arg-type]
     with pytest.raises(ValueError):
         default_shares("none")
+
+
+def test_best_share_within_a_loss_budget() -> None:
+    """The highlighted composition: the highest return among the shares whose loss measure — the 1-day CVaR 95 % by default, or the max drawdown
+    as a positive loss — exceeds the 0 % share's by at most ``budget``; the smallest share on a tie; a budget of 0 keeps the long portfolio
+    unless a mix loses less."""
+    df = pd.DataFrame({"annualised return": [0.08, 0.09, 0.10, 0.11], "VaR 95 %": [0.030, 0.038, 0.045, 0.052], "CVaR 95 %": [0.040, 0.047, 0.060, 0.070],
+                       "max drawdown": [-0.30, -0.35, -0.42, -0.50]}, index=pd.Index([0.0, 0.1, 0.2, 0.3], name="share"))
+    assert best_share(df, 0.010) == 0.1 and best_share(df, 0.020) == 0.2 and best_share(df, 0.0) == 0.0 and best_share(df, 0.030) == 0.3   # the default: the 1-day CVaR 95 %
+    assert best_share(df, 0.010, "VaR 95 %") == 0.1 and best_share(df, 0.015, "VaR 95 %") == 0.2 and best_share(df, 0.005, "VaR 95 %") == 0.0
+    assert best_share(df, 0.010, "CVaR 95 %") == 0.1 and best_share(df, 0.020, "CVaR 95 %") == 0.2 and best_share(df, 0.030, "CVaR 95 %") == 0.3
+    nan0 = df.assign(**{"CVaR 95 %": [np.nan, 0.04, 0.04, 0.04]})   # no value for the long portfolio: the rule keeps it
+    assert best_share(nan0, 1.0) == 0.0
+    assert best_share(df, 0.10, "max drawdown") == 0.1 and best_share(df, 0.15, "max drawdown") == 0.2 and best_share(df, 0.0, "max drawdown") == 0.0
+    tie = df.assign(**{"annualised return": [0.10, 0.10, 0.10, 0.10]})
+    assert best_share(tie, 1.0) == 0.0
+    less = df.assign(**{"VaR 95 %": [0.030, 0.025, 0.045, 0.052]})   # a mix that loses less than SPX is eligible under any budget
+    assert best_share(less, 0.0, "VaR 95 %") == 0.1
+    for kw in ({"budget": -0.1}, {"budget": 0.1, "measure": "Sharpe ratio"}):
+        with pytest.raises(ValueError):
+            best_share(df, **kw)   # type: ignore[arg-type]
 
 
 def test_grid_on_three_month_ends(tmp_path: Path) -> None:

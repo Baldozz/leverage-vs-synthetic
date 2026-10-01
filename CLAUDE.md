@@ -13,10 +13,10 @@ separate, simplified exercise, kept apart from the above in every document** (RE
 LIMITATIONS 18, its own navigation group in the app): `app/views/five_scenarios.py`, engine `src/fosim/analytics/five_scenarios.py` — the investor's
 five ways to hold 650 m from five start dates (data start, dot-com peak and bottom, GFC peak and bottom) (long, levered long, SPX + a call sleeve, long + the sleeve on a loan, all in calls; the sleeve sized by
 premium — 25 % of the capital, the note's 162.5 m — or by exposure as an option, built in 52 weekly slots, the money waiting in SPX; fixed 14.5 % premium, 24 % tax
-at every call expiry, margin calls flagged), none of Part 1's rules, sharing only the data and the pricer. **Page 4 ("Call-share sweep") belongs to the same separate group**: scenario 3 alone with its call share swept (0 % = the long
-portfolio, then 5 → 50 % step 5 by default) from the five named starts or every month-end start (Launch button, surface) — `app/views/call_share_sweep.py`, engine
+at every call expiry, margin calls flagged — or, as an option, a forced sale to a target LTV), none of Part 1's rules, sharing only the data and the pricer. **Page 4 ("Call-share sweep") belongs to the same separate group**: scenario 3 alone with its call share swept (0 % = the long
+portfolio, then 5 → 95 % step 5 by default) from the five named starts or every month-end start (Launch button, the median across the starts) — `app/views/call_share_sweep.py`, engine
 `src/fosim/analytics/call_share_sweep.py` over `simulate_scenarios(..., scenarios=("3",))`, tests `tests/test_call_share_sweep.py`, METHODOLOGY §10 bullet, ASSUMPTIONS 41,
-LIMITATIONS 19; its sidebar keys `c_*` share page 3's widget helpers in `app/common.py`. Keep the two parts separate when editing docs.
+LIMITATIONS 19; its sidebar holds the swept range and the CVaR 95 % budget only — every other assumption is read from page 3's sidebar (`scenario_setup()`), so the two pages' numbers agree. Keep the two parts separate when editing docs.
 The earlier Monte Carlo simulator (strategies A/B/C/D, `SPEC.md`, `docs/PLAN.md`, `app/streamlit_app.py`) is kept
 for reference and its tests still run.
 

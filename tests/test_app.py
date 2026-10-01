@@ -345,9 +345,11 @@ def test_five_scenarios_page() -> None:
     assert not at.exception, [e.value for e in at.exception]
     assert [w.label for w in at.sidebar.number_input] == ["Capital (USD m)", "Loan (% of the capital)", "Exposure (% of the capital)", "Premium (% of the capital)", "Steps (1 = all on the start day)",
                                                           "Flat rate (%)", "Spread over the base rate (bp)", "Premium (% of notional)",
-                                                          "Tax on the profit at expiry (%)", "Dividend withholding tax (%)", "Lending value of the SPX (%)", "Lending value of the calls (%)", "Margin call at LTV (%)"]
-    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Interest at", "Premium", "Scenario 2: the loan is", "Scenario 3 at a slot's expiry, refill from:", "Scenario 4 at a slot's expiry, the loan is"] and [c.label for c in at.sidebar.checkbox] == []
-    assert at.radio(key="f_repay4").value == "repaid from the call proceeds, only the surplus in new calls"
+                                                          "Tax on the profit at expiry (%)", "LTV after the sale (%)", "Dividend withholding tax (%)", "Lending value of the SPX (%)", "Lending value of the calls (%)", "Margin call at LTV (%)"]
+    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Interest at", "Premium", "Scenario 2: the loan is", "Scenario 3 at a slot's expiry, refill from:", "Scenario 4 at a slot's expiry, the loan is", "On a margin call"] and [c.label for c in at.sidebar.checkbox] == []
+    assert at.radio(key="f_on_call").value == "SPX sold to bring the LTV back to" and at.number_input(key="f_ltv_after").value == 50.0 and not at.number_input(key="f_ltv_after").proto.disabled   # the default since 2026-10-01 evening
+    assert at.radio(key="f_repay4").value == "never repaid: the slot refilled on a new loan" and at.radio(key="f_repay").value == "rolled up to the end"   # the page's defaults (user, 2026-10-01)
+    PAGE = {"repay": "never", "repay_calls": "reborrow", "on_call": "liquidate", "ltv_after_call": 0.5}   # the page's defaults, passed to every direct engine run below (the engine's own defaults keep the note's readings)
     # the scenarios' rules visible in the sidebar in scenario order (user, 2026-10-01), not inside Advanced
     assert any(md.value == "**The scenarios' rules**" for md in at.sidebar.markdown) and len(at.sidebar.expander) == 1 and len(at.sidebar.expander[0].radio) == 0
     assert [w.label for w in at.sidebar.selectbox] == ["Call tenor (years)"] and at.number_input(key="f_capital").value == 650.0 and at.number_input(key="f_prem").value == 14.5 and at.number_input(key="f_tax").value == 24.0
@@ -367,7 +369,7 @@ def test_five_scenarios_page() -> None:
     assert len(at.caption) == 12 and any(md.value == "##### Notes" for md in at.markdown) and [n.split("\n")[0] for n in notes] == [
         "**Setup** (the sidebar; Assumptions 40)", "**The five scenarios**", "**At a slot's expiry** (payoff in cash, tax where due)", "**Departures from the investor's note**", "**Reading the charts**", "**Reading the tables**", "**Caveats**"]
     assert "\n- **Risk**, on each scenario's own daily NAV returns" in notes[5] and "× √252" in notes[5]
-    assert notes[3].count("\n- ") == 4 and "- The sleeve is built over 52 weekly slots" in notes[3] and "- Scenario 5 is taxed like 3 and 4" in notes[3] and "- Scenario 3 refills an expired slot from the whole portfolio" in notes[3] and "- Exposure is counted at the model's delta" in notes[3]
+    assert notes[3].count("\n- ") == 5 and "- Scenario 4 never repays its loan and borrows for every replacement call" in notes[3] and "- The sleeve is built over 52 weekly slots" in notes[3] and "- Scenario 5 is taxed like 3 and 4" in notes[3] and "- Scenario 3 refills an expired slot from the whole portfolio" in notes[3] and "- Exposure is counted at the model's delta" in notes[3]
     assert "- **Capital**: 650 m; every start held to 14 Sep 2026" in notes[0] and "- **Loan**: 162.5 m (25% of the capital) at 5.50%" in notes[0]
     assert "- **Sleeve**: 25% of the capital in premium = 162.5 m, notional 1,121 m; the note counts 560 m of delta at 50 %, the model's delta at the first start is 44% (492 m)." in notes[0]
     assert "- **Build**: 52 weekly slots (first start: 09 Sep 1997 → 01 Sep 1998)" in notes[0] and "- **Tax**: 24% of a call's profit (payoff − premium, when positive) at expiry, scenarios 3 and 4 and 5;" in notes[0]
@@ -375,13 +377,15 @@ def test_five_scenarios_page() -> None:
     # the overview: one row per start, one column per scenario, the cells recomputed from the engine
     ov = at.table[0].value
     assert list(ov.columns) == names and list(ov.index) == ["data start, 09 Sep 1997", "dot-com peak, 24 Mar 2000", "dot-com bottom, 09 Oct 2002", "GFC peak, 09 Oct 2007", "GFC bottom, 09 Mar 2009"]
-    runs = {d: simulate_scenarios(d, "2026-09-14") for d in ("1997-09-09", "2000-03-24", "2002-10-09", "2007-10-09", "2009-03-09")}
+    runs = {d: simulate_scenarios(d, "2026-09-14", **PAGE) for d in ("1997-09-09", "2000-03-24", "2002-10-09", "2007-10-09", "2009-03-09")}
     for i, d in enumerate(runs):
         sm = summary(*runs[d])
         for sid, name in zip(LABELS, names, strict=True):
             assert ov.iloc[i][name].startswith(f"{sm.loc['NAV today', sid] / m:,.0f} m · {sm.loc['annualised return', sid]:+.1%}")
     assert ov.iloc[0][names[4]].endswith("· ✕ Sep 2003") and ov.iloc[1][names[4]].endswith("· ✕ Mar 2011") and not any("✕" in ov.iloc[i][names[4]] for i in (2, 3, 4))
-    assert not any("⚠" in v for v in ov.to_numpy().ravel())   # no margin call at the 90 % level on the defaults
+    # the margin calls at the 90 % level on the page's defaults: scenario 4, never repaying its loan, from the 1997 start, the 2000 peak (Oct 2008) and the 2002 bottom (Feb 2009); nothing else
+    assert [i for i in range(5) if "⚠" in ov.iloc[i][names[3]]] == [0, 1, 2] and ov.iloc[1][names[3]].endswith("· ⚠ Oct 2008") and ov.iloc[2][names[3]].endswith("· ⚠ Feb 2009")
+    assert not any("⚠" in ov.iloc[i][name] for i in range(5) for name in names if name != names[3])
     # the GFC-bottom start's table against the engine: short cells, numbers and dates
     paths, infos = runs["2009-03-09"]
     sm = summary(paths, infos)
@@ -398,7 +402,7 @@ def test_five_scenarios_page() -> None:
     nav1 = paths["1"]["nav"].to_numpy()   # the volatility recomputed from the path, not read back from summary
     assert sm.loc["volatility", "1"] == pytest.approx((nav1[1:] / nav1[:-1] - 1.0).std(ddof=1) * 252 ** 0.5, rel=1e-12)
     assert t.loc["margin call", names[0]] == "—" and t.loc["margin call", names[1]] == f"none, LTV up to {infos['2'].max_ltv:.0%}" and t.loc["margin call", names[3]] == f"none, LTV up to {infos['4'].max_ltv:.0%}"
-    assert t.loc["loan repaid", names[1]] == "10 Mar 2014" and t.loc["loan repaid", names[3]] == "02 Mar 2015" and t.loc["loan repaid", names[0]] == "—"   # 4's loan: slot by slot, gone at the 52nd expiry
+    assert t.loc["loan repaid", names[1]] == "never" and t.loc["loan repaid", names[3]] == "never" and t.loc["loan repaid", names[0]] == "—"   # both loans rolled up to the end by default
     assert t.loc["calls expired", names[2]] == "156 (0 worthless)" and t.loc["calls expired", names[0]] == "—"
     assert t.loc["tax paid", names[2]] == f"{sm.loc['tax paid', '3'] / m:,.0f} m" and t.loc["tax paid", names[4]] == f"{sm.loc['tax paid', '5'] / m:,.0f} m" and t.loc["interest paid", names[1]] == f"{sm.loc['interest paid', '2'] / m:,.0f} m"
     assert t.loc["holdings today", names[2]] == f"SPX {sm.loc['SPX today', '3'] / m:,.0f} m · calls {sm.loc['calls today', '3'] / m:,.0f} m (52)" and t.loc["holdings today", names[4]].startswith("SPX 0 m · calls ")
@@ -409,35 +413,55 @@ def test_five_scenarios_page() -> None:
     # the dot-com-peak chart: five NAV lines, five exposure lines, the two LTV lines, the expiry markers (one per slot), the loan repayment, the end labels, the wipe-out label, the build band; no margin-call label
     p2000, _ = runs["2000-03-24"]
     fig = json.loads(at.get("plotly_chart")[1].proto.spec)
-    assert [tr["name"] for tr in fig["data"]] == [names[0], f"{names[0]}: exposure", names[1], f"{names[1]}: exposure", "2: loan repaid", f"{names[1]}: LTV", names[2], f"{names[2]}: exposure", "3: expiry",
-                                                  names[3], f"{names[3]}: exposure", "4: expiry", f"{names[3]}: LTV", names[4], f"{names[4]}: exposure", "5: expiry"]
-    for sid, j in (("1", 0), ("2", 2), ("3", 6), ("4", 9), ("5", 13)):
+    assert [tr["name"] for tr in fig["data"]] == [names[0], f"{names[0]}: exposure", names[1], f"{names[1]}: exposure", f"{names[1]}: LTV", names[2], f"{names[2]}: exposure", "3: expiry",
+                                                  names[3], f"{names[3]}: exposure", "4: expiry", f"{names[3]}: LTV", "4: margin call", names[4], f"{names[4]}: exposure", "5: expiry"]
+    for sid, j in (("1", 0), ("2", 2), ("3", 5), ("4", 8), ("5", 13)):
         assert fig["data"][j]["y"][-1] == pytest.approx(p2000[sid]["nav"].iloc[-1] / m, rel=1e-9) and len(fig["data"][j]["x"]) == len(p2000[sid])
         assert fig["data"][j + 1]["y"][-1] == pytest.approx(p2000[sid]["exposure"].iloc[-1] / m, rel=1e-9) and fig["data"][j + 1]["yaxis"] == "y2"
-    assert fig["data"][4]["x"] == ["2005-03-24T00:00:00"] and len(fig["data"][8]["x"]) == 260 and fig["data"][8]["customdata"][0][6] == 1 and fig["data"][5]["y"][0] == pytest.approx(p2000["2"]["ltv"].iloc[0] * 100)
-    assert fig["data"][5]["yaxis"] == "y3" and fig["data"][8]["marker"]["size"] == 5
+    assert len(fig["data"][7]["x"]) == 260 and fig["data"][7]["customdata"][0][6] == 1 and fig["data"][4]["y"][0] == pytest.approx(p2000["2"]["ltv"].iloc[0] * 100)
+    assert fig["data"][4]["yaxis"] == "y3" and fig["data"][7]["marker"]["size"] == 5 and fig["data"][12]["x"] == ["2008-10-03T00:00:00"]   # scenario 4 called on 3 Oct 2008
     texts = [a["text"] for a in fig["layout"]["annotations"]]
     assert "<b>5 wiped out</b> 16 Mar 2011" in texts and f"<span style='color:#2a78d6'>●</span> 1: {p2000['1']['nav'].iloc[-1] / m:,.0f} m" in texts and "margin call (LTV 90%)" in texts and "build to Mar 2001" in texts
     assert any(sh["x1"] == "2001-03-16T00:00:00" and sh["x0"] == "2000-03-24T00:00:00" for sh in fig["layout"]["shapes"])   # the build band
-    assert not any("margin call</b>" in tx for tx in texts) and {tx for tx in texts if tx.startswith(("peak", "bottom"))} == {"peak Mar 2000", "bottom Oct 2002", "peak Oct 2007", "bottom Mar 2009", "peak Feb 2020", "bottom Mar 2020", "peak Jan 2022", "bottom Oct 2022"}   # the start is the peak day, so its line is drawn
+    i4 = runs["2000-03-24"][1]["4"]
+    first4, l4 = i4.margin_call_first, i4.liquidations[0]
+    sold4 = sum(lq.spx_sold + lq.calls_sold + lq.cash_used for lq in i4.liquidations)
+    assert f"<b>⚠ 4 margin call</b> {first4:%d %b %Y} — LTV {l4.ltv_before:.0%} — sold {sold4 / m:,.0f} m → LTV {l4.ltv_after:.0%}" in texts and first4 == pd.Timestamp("2008-10-03") and l4.ltv_after == pytest.approx(0.5, abs=1e-9) and {tx for tx in texts if tx.startswith(("peak", "bottom"))} == {"peak Mar 2000", "bottom Oct 2002", "peak Oct 2007", "bottom Mar 2009", "peak Feb 2020", "bottom Mar 2020", "peak Jan 2022", "bottom Oct 2022"}   # the start is the peak day, so its line is drawn
     for i in range(5):   # fixed margins on the five charts, the NAV and exposure axes in log scale by default
         lay = json.loads(at.get("plotly_chart")[i].proto.spec)["layout"]
         assert lay["margin"]["l"] == 80 and lay["margin"]["r"] == 120 and lay["yaxis"]["automargin"] is False and lay["yaxis"]["type"] == "log" and lay["yaxis2"]["type"] == "log"
-    # the margin-call flag: with the bank calling at 50 % of the lending value the levered long from the 2000 peak is called (LTV up to 59 %); the label, the marker and the overview cell follow the engine
+    # the bank calling at 50 % of the lending value: the levered long from the 2000 peak is called (LTV up to 59 %); with the page's default the SPX is sold that day
+    # back to the target (set to 30 % here: it must sit below the call level) — the label, the marker and the cells follow the engine; flagged only, the old cell
+    at.number_input(key="f_ltv_after").set_value(30.0)
     at.number_input(key="f_margin").set_value(50.0).run()
     assert not at.exception, [e.value for e in at.exception]
-    q, qi = simulate_scenarios("2000-03-24", "2026-09-14", margin_call=0.5)
-    first = qi["2"].margin_call_first
-    assert first is not None and qi["4"].margin_call_first is not None
+    ql, qli = simulate_scenarios("2000-03-24", "2026-09-14", margin_call=0.5, **{**PAGE, "ltv_after_call": 0.3})
+    first = qli["2"].margin_call_first
+    assert first is not None and qli["4"].margin_call_first is not None
+    l0 = qli["2"].liquidations[0]
+    sold = sum(lq.spx_sold + lq.calls_sold + lq.cash_used for lq in qli["2"].liquidations)
+    assert l0.date == first and l0.ltv_after == pytest.approx(0.3, abs=1e-9) and l0.calls_sold == 0.0 and sold > 0.0 and bool(ql["2"]["margin_call"].loc[first])
     fig = json.loads(at.get("plotly_chart")[1].proto.spec)
     texts = [a["text"] for a in fig["layout"]["annotations"]]
-    assert f"<b>⚠ 2 margin call</b> {first:%d %b %Y} — LTV {float(q['2']['ltv'].loc[first]):.0%}" in texts and "margin call (LTV 50%)" in texts
+    assert f"<b>⚠ 2 margin call</b> {first:%d %b %Y} — LTV {l0.ltv_before:.0%} — sold {sold / m:,.0f} m → LTV {l0.ltv_after:.0%}" in texts and "margin call (LTV 50%)" in texts
     flag = next(tr for tr in fig["data"] if tr["name"] == "2: margin call")
     assert flag["x"] == [first.strftime("%Y-%m-%dT%H:%M:%S")] and flag["marker"]["symbol"] == "x" and flag["marker"]["color"] == "#c00000"
     ov = at.table[0].value
     assert ov.iloc[1][names[1]].endswith(f"· ⚠ {first:%b %Y}")
+    cell = f"⚠ {first:%d %b %Y}, LTV {l0.ltv_before:.0%} → sold {sold / m:,.0f} m, LTV {l0.ltv_after:.0%}" + (f", {len(qli['2'].liquidations)} sales" if len(qli["2"].liquidations) > 1 else "")
+    assert at.table[2].value.loc["margin call", names[1]] == cell and at.table[2].value.loc["NAV today", names[1]] == f"{float(ql['2']['nav'].iloc[-1]) / m:,.0f} m · {summary(ql, qli).loc['annualised return', '2']:+.1%} a year"
+    at.radio(key="f_on_call").set_value("flagged, nothing sold").run()
+    assert not at.exception, [e.value for e in at.exception]
+    q, qi = simulate_scenarios("2000-03-24", "2026-09-14", margin_call=0.5, **{**PAGE, "on_call": "flag"})
+    assert qi["2"].margin_call_first == first
+    assert f"<b>⚠ 2 margin call</b> {first:%d %b %Y} — LTV {float(q['2']['ltv'].loc[first]):.0%}" in [a["text"] for a in json.loads(at.get("plotly_chart")[1].proto.spec)["layout"]["annotations"]]
     assert at.table[2].value.loc["margin call", names[1]] == f"⚠ {first:%d %b %Y}, LTV {float(q['2']['ltv'].loc[first]):.0%}, {qi['2'].days_in_margin_call} days"
+    at.radio(key="f_on_call").set_value("SPX sold to bring the LTV back to").run()
+    at.number_input(key="f_ltv_after").set_value(60.0).run()   # a target above the call level: refused on the page
+    assert at.error and len(at.get("plotly_chart")) == 0
+    at.number_input(key="f_ltv_after").set_value(50.0)
     at.number_input(key="f_margin").set_value(90.0).run()
+    assert not at.exception, [e.value for e in at.exception]
     # linear scale and an extra start
     at.checkbox(key="f_log").uncheck().run()
     assert not at.exception, [e.value for e in at.exception]
@@ -459,76 +483,92 @@ def test_five_scenarios_page() -> None:
 
 
 def test_call_share_sweep_page() -> None:
-    """Page 4: scenario 3 alone with its call share swept from the five named starts — the sidebar (its own keys, page 3's defaults, the swept range),
-    the frontier and the measures cross-checked against direct runs (0 % = scenario 1, every other point = scenario 3 at that share), the table,
-    the range and the sizing switches, the month-end mode behind its Launch button (not launched: twenty minutes), page 3 untouched."""
+    """Page 4: scenario 3 alone with its composition swept from the five named starts — the sidebar (its own keys, page 3's defaults, the swept range),
+    one heat map per start (rows: annualised return, volatility; columns: the composition — SPX exposure / call exposure) cross-checked against direct
+    runs (100 / 0 = scenario 1, every other cell = scenario 3 at that share), the table, the range and the sizing switches, the month-end mode behind its Launch button (not launched:
+    twenty minutes), page 3 untouched."""
     import json
 
     from fosim.analytics.five_scenarios import simulate_scenarios, summary
 
     at = AppTest.from_file(str(APP.parent / "historical_app.py"), default_timeout=600)
-    at.session_state["c_prem_to"] = 20.0   # 0, 5, 10, 15, 20 %: five shares × five starts keep the test short
+    at.session_state["c_prem_to"] = 20.0   # 100/0, 95/5, 90/10, 85/15, 80/20: five compositions × five starts keep the test short
     at.switch_page("views/call_share_sweep.py")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    # the sidebar: scenario 3's inputs only (no loan, no lending values, no scenario 2 / 4 rules), the swept range, the tenor and WHT shared
-    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Premium", "Scenario 3 at a slot's expiry, refill from:"] and [w.label for w in at.sidebar.selectbox] == ["Call tenor (years)"]
-    assert [w.label for w in at.sidebar.number_input] == ["Capital (USD m)", "from", "to", "step", "from", "to", "step", "Steps (1 = all on the start day)", "Premium (% of notional)", "Tax on the profit at expiry (%)", "Dividend withholding tax (%)"]
-    assert at.number_input(key="c_capital").value == 650.0 and at.number_input(key="c_prem").value == 14.5 and at.number_input(key="c_tax").value == 24.0 and at.number_input(key="c_build_steps").value == 52
-    assert (at.number_input(key="c_prem_from").value, at.number_input(key="c_prem_to").value, at.number_input(key="c_prem_step").value) == (5.0, 20.0, 5.0)
+    # the sidebar: the swept range and the CVaR budget only — every other assumption is page 3's (read, not drawn)
+    assert [w.label for w in at.sidebar.radio] == [] and [w.label for w in at.sidebar.selectbox] == [] and len(at.sidebar.expander) == 0
+    assert [w.label for w in at.sidebar.number_input] == ["from", "to", "step", "from", "to", "step", "CVaR 95 % budget (points beyond pure SPX)"]
+    assert (at.number_input(key="c_prem_from").value, at.number_input(key="c_prem_to").value, at.number_input(key="c_prem_step").value) == (5.0, 20.0, 5.0) and at.number_input(key="c_cvar_budget").value == 1.0
     assert (at.number_input(key="c_exp_from").value, at.number_input(key="c_exp_to").value, at.number_input(key="c_exp_step").value) == (10.0, 100.0, 10.0)
     assert all(at.number_input(key=f"c_exp_{k}").proto.disabled for k in ("from", "to", "step")) and not any(at.number_input(key=f"c_prem_{k}").proto.disabled for k in ("from", "to", "step"))
-    assert at.radio(key="c_sizing").value.startswith("premium") and not at.radio(key="c_rebalance").proto.disabled and len(at.sidebar.expander) == 1
+    assert any(c.value.startswith("Capital 650 m · sleeve sized by premium · built in 52 weekly slots · 5-year ATM calls at 14.5% of notional · tax 24% at expiry") for c in at.sidebar.caption)
     starts = ["data start — 09 Sep 1997, SPX 934", "dot-com peak — 24 Mar 2000, SPX 1,527", "dot-com bottom — 09 Oct 2002, SPX 777", "GFC peak — 09 Oct 2007, SPX 1,565", "GFC bottom — 09 Mar 2009, SPX 677"]
-    assert at.multiselect(key="c_starts").value == starts and at.radio(key="c_mode").value == "the five named starts" and len(at.get("plotly_chart")) == 2 and len(at.table) == 1
+    assert at.multiselect(key="c_starts").value == starts and at.radio(key="c_mode").value == "the five named starts" and len(at.get("plotly_chart")) == 5 and len(at.table) == 1
+    assert [h.value for h in at.subheader] == ["Start 09 Sep 1997 — data start, SPX 934", "Start 24 Mar 2000 — dot-com peak, SPX 1,527", "Start 09 Oct 2002 — dot-com bottom, SPX 777", "Start 09 Oct 2007 — GFC peak, SPX 1,565", "Start 09 Mar 2009 — GFC bottom, SPX 677"]
     assert at.caption[1].value == ("Capital 650 m · scenario 3 (SPX + calls) alone, the sleeve sized by premium, swept 0 % then 5 → 20 % step 5 of the capital · built in 52 weekly slots · "
                                    "5-year ATM calls on SPXFP at 14.5% of notional · tax 24% of the profit at expiry · every start held to 14 Sep 2026.")
     notes = [c.value for c in at.caption if c.value.startswith("**")]
-    assert [n.split("\n")[0] for n in notes] == ["**Setup** (the sidebar; Assumptions 41)", "**Reading the charts**", "**Reading the tables**", "**Caveats**"] and "- **0 %** buys no call at all" in notes[0]
-    # the frontier against the engine: the GFC-bottom curve's points are scenario 3 at 0, 5, 10, 15, 20 %; the 0 % point and the diamond are scenario 1
-    fig = json.loads(at.get("plotly_chart")[0].proto.spec)
-    traces = {tr["name"]: tr for tr in fig["data"]}
-    gfc = traces["GFC bottom"]
-    assert gfc["text"] == ["0 %", "5 %", "10 %", "15 %", "20 %"] and gfc["mode"] == "lines+markers+text" and "◇ 0 % = long the market (scenario 1)" in traces
-    paths, infos = simulate_scenarios("2009-03-09", "2026-09-14", call_frac=0.10, scenarios=("1", "3"))
+    assert [n.split("\n")[0] for n in notes] == ["**Setup** (the sidebar; Assumptions 41)", "**Reading the heat maps**", "**Reading the tables**", "**Caveats**"] and "- **100 / 0** buys no call at all" in notes[0]
+    assert "1-day CVaR 95 % exceeds the long portfolio's (100 / 0) by at most 1 points of the NAV" in notes[1]
+    # the GFC-bottom heat map against the engine: six rows, one column per composition; 100 / 0 is scenario 1
+    from fosim.analytics.call_share_sweep import best_share, sweep_call_share
+    comps = ["100 / 0", "95 / 5", "90 / 10", "85 / 15", "80 / 20"]
+    cols = ["SPX 100 %<br>calls 0 %", "SPX 95 %<br>calls 5 %", "SPX 90 %<br>calls 10 %", "SPX 85 %<br>calls 15 %", "SPX 80 %<br>calls 20 %"]
+    labels = ["annualised return", "volatility", "max drawdown", "Sharpe ratio", "1-day VaR 95 %", "1-day CVaR 95 %"]
+    fig = json.loads(at.get("plotly_chart")[4].proto.spec)
+    assert all(tr["type"] == "heatmap" and tr["x"] == cols for tr in fig["data"]) and [tr["y"][0] for tr in fig["data"]] == labels and fig["data"][-1]["xaxis"] == "x6"
+    assert fig["layout"]["xaxis6"]["title"]["text"] == "composition: % SPX / % calls" and fig["layout"]["title"]["text"] == "From 09 Mar 2009: return, volatility, max drawdown, Sharpe ratio, VaR and CVaR by composition"
+    paths, infos = simulate_scenarios("2009-03-09", "2026-09-14", call_frac=0.10, scenarios=("1", "3"), on_call="liquidate", ltv_after_call=0.5)
     sm = summary(paths, infos)
-    assert gfc["x"][2] == pytest.approx(sm.loc["volatility", "3"] * 100, rel=1e-9) and gfc["y"][2] == pytest.approx(sm.loc["annualised return", "3"] * 100, rel=1e-9)
-    assert gfc["x"][0] == pytest.approx(sm.loc["volatility", "1"] * 100, rel=1e-9) and gfc["y"][0] == pytest.approx(sm.loc["annualised return", "1"] * 100, rel=1e-9)
-    assert traces["GFC bottom: long"]["x"] == [gfc["x"][0]] and traces["GFC bottom: long"]["marker"]["symbol"] == "diamond"
-    assert gfc["customdata"][2][0] == pytest.approx(sm.loc["Sharpe ratio", "3"], rel=1e-9) and gfc["customdata"][2][1] == pytest.approx(sm.loc["max drawdown", "3"], rel=1e-9)
-    # the measures against the share: six panels, the GFC-bottom line of the first = the annualised return
-    fig2 = json.loads(at.get("plotly_chart")[1].proto.spec)
-    assert [a["text"] for a in fig2["layout"]["annotations"][:6]] == ["annualised return", "annualised volatility", "max drawdown", "1-day VaR 99 %", "Sharpe ratio", "1-day CVaR 99 %"]
-    first_panel = next(tr for tr in fig2["data"] if tr["name"] == "GFC bottom")
-    assert first_panel["x"] == [0.0, 5.0, 10.0, 15.0, 20.0] and first_panel["y"][2] == pytest.approx(sm.loc["annualised return", "3"] * 100, rel=1e-9)
-    # the table: one row block per start, the columns the shares
+    for i, (col, mult) in enumerate((("annualised return", 100), ("volatility", 100), ("max drawdown", 100), ("Sharpe ratio", 1), ("VaR 95 %", 100), ("CVaR 95 %", 100))):
+        assert fig["data"][i]["z"][0][2] == pytest.approx(sm.loc[col, "3"] * mult, rel=1e-9) and fig["data"][i]["z"][0][0] == pytest.approx(sm.loc[col, "1"] * mult, rel=1e-9), col
+    assert fig["data"][0]["text"][0][2] == f"{sm.loc['annualised return', '3'] * 100:+.1f} %" and fig["data"][5]["text"][0][2] == f"{sm.loc['CVaR 95 %', '3'] * 100:.2f} %" and fig["data"][3]["text"][0][2] == f"{sm.loc['Sharpe ratio', '3']:.2f}"
+    # the ★: the highest return within 1 point of the NAV of pure SPX's 1-day CVaR 95 % — framed and starred, the engine's rule on the same sweep
+    sw = sweep_call_share("2009-03-09", "2026-09-14", (0.0, 0.05, 0.10, 0.15, 0.20), on_call="liquidate", ltv_after_call=0.5)
+    j = [0.0, 0.05, 0.10, 0.15, 0.20].index(best_share(sw, 0.01))
+    star = next(a for a in fig["layout"]["annotations"] if a["text"].startswith("★ best"))
+    assert star["text"] == f"★ best within the 1-day CVaR 95 % budget: {cols[j].replace('<br>', ' / ')}" and star["x"] == j and any(sh["x0"] == j - 0.5 and sh["x1"] == j + 0.5 for sh in fig["layout"]["shapes"])
+    assert sw.loc[sw.index[j], "CVaR 95 %"] <= sw.loc[0.0, "CVaR 95 %"] + 0.01 + 1e-12 and all(sw.loc[k, "annualised return"] <= sw.loc[sw.index[j], "annualised return"] for k in sw.index if sw.loc[k, "CVaR 95 %"] <= sw.loc[0.0, "CVaR 95 %"] + 0.01)
+    # the table: one row block per start (the heat map's rows), the columns the compositions
     t = at.table[0].value
-    assert list(t.columns) == ["0 %", "5 %", "10 %", "15 %", "20 %"] and list(t.index)[:4] == ["data start · return", "data start · vol", "data start · Sharpe", "data start · max DD"] and len(t) == 20
-    assert t.loc["GFC bottom · return", "10 %"] == f"{sm.loc['annualised return', '3']:+.1%}" and t.loc["GFC bottom · Sharpe", "10 %"] == f"{sm.loc['Sharpe ratio', '3']:.2f}" and t.loc["GFC bottom · return", "0 %"] == f"{sm.loc['annualised return', '1']:+.1%}"
-    # the range is what was asked: a step of 10 from 5 to 20 gives 0, 5, 15
+    assert list(t.columns) == comps and list(t.index)[:6] == [f"data start · {lab}" for lab in labels] and len(t) == 30
+    assert t.loc["GFC bottom · annualised return", "90 / 10"] == f"{sm.loc['annualised return', '3'] * 100:+.1f} %" and t.loc["GFC bottom · 1-day CVaR 95 %", "90 / 10"] == f"{sm.loc['CVaR 95 %', '3'] * 100:.2f} %"
+    # the range is what was asked: a step of 10 from 5 to 20 gives 100/0, 95/5, 85/15
     at.number_input(key="c_prem_step").set_value(10.0).run()
     assert not at.exception, [e.value for e in at.exception]
-    gfc = {tr["name"]: tr for tr in json.loads(at.get("plotly_chart")[0].proto.spec)["data"]}["GFC bottom"]
-    assert gfc["text"] == ["0 %", "5 %", "15 %"] and list(at.table[0].value.columns) == ["0 %", "5 %", "15 %"]
-    # exposure sizing: the exposure share is swept, scenario 3's refill fixed on the whole portfolio, the 50 % point = scenario 3 at that exposure
-    at.radio(key="c_sizing").set_value("exposure: % of the capital in SPX-equivalent (delta × notional)").run()   # the exposure triplet enabled by this run
+    ret = json.loads(at.get("plotly_chart")[4].proto.spec)["data"][0]
+    assert ret["x"] == [cols[0], cols[1], cols[3]] and list(at.table[0].value.columns) == ["100 / 0", "95 / 5", "85 / 15"]
+    # exposure sizing, set on page 3 (page 4 follows): the exposure share is swept (the x axis says so), the 50 % point = scenario 3 at that exposure
+    at.switch_page("views/five_scenarios.py")
+    at.run()
+    at.radio(key="f_sizing").set_value("exposure: % of the capital in SPX-equivalent (delta × notional)").run()
     assert not at.exception, [e.value for e in at.exception]
+    at.switch_page("views/call_share_sweep.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert all(at.number_input(key=f"c_prem_{k}").proto.disabled for k in ("from", "to", "step")) and not any(at.number_input(key=f"c_exp_{k}").proto.disabled for k in ("from", "to", "step"))
     at.number_input(key="c_exp_from").set_value(50.0)
     at.number_input(key="c_exp_step").set_value(50.0).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert at.radio(key="c_rebalance").proto.disabled and at.radio(key="c_rebalance").value.startswith("the whole portfolio") and all(at.number_input(key=f"c_prem_{k}").proto.disabled for k in ("from", "to", "step"))
-    gfc = {tr["name"]: tr for tr in json.loads(at.get("plotly_chart")[0].proto.spec)["data"]}["GFC bottom"]
+    fig = json.loads(at.get("plotly_chart")[4].proto.spec)
+    ret = fig["data"][0]
     smx = summary(*simulate_scenarios("2009-03-09", "2026-09-14", sizing="exposure", exposure_frac=0.5, scenarios=("3",)))
-    assert gfc["text"] == ["0 %", "50 %", "100 %"] and gfc["x"][1] == pytest.approx(smx.loc["volatility", "3"] * 100, rel=1e-9) and gfc["y"][1] == pytest.approx(smx.loc["annualised return", "3"] * 100, rel=1e-9)
+    assert ret["x"] == ["calls 0 %<br>of exposure", "calls 50 %<br>of exposure", "calls 100 %<br>of exposure"] and ret["z"][0][1] == pytest.approx(smx.loc["annualised return", "3"] * 100, rel=1e-9) and fig["layout"]["xaxis6"]["title"]["text"].startswith("SPX-equivalent exposure")
     assert "sized by exposure, swept 0 % then 50 → 100 % step 50 of the capital" in at.caption[1].value
     # every month-end start: behind the Launch button (not pressed here: twenty minutes); the named sections still shown
     at.radio(key="c_mode").set_value("every month-end start").run()
     assert not at.exception, [e.value for e in at.exception]
-    assert not at.button(key="c_launch").proto.disabled and any("Press **Launch**" in i.value for i in at.info) and len(at.get("plotly_chart")) == 2 and len(at.table) == 1
-    # page 3 untouched by page 4's settings: its own keys and defaults, the tenor shared
-    at.selectbox(key="s_tenor").set_value(7)
+    assert not at.button(key="c_launch").proto.disabled and any("Press **Launch**" in i.value for i in at.info) and len(at.get("plotly_chart")) == 5 and len(at.table) == 1
+    # page 3 keeps its settings (page 4 only reads them): the sizing put back, its other inputs untouched; the tenor is page 3's too
     at.switch_page("views/five_scenarios.py")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
+    at.radio(key="f_sizing").set_value("premium: % of the capital")
+    at.selectbox(key="s_tenor").set_value(7).run()
     assert at.radio(key="f_sizing").value.startswith("premium") and at.number_input(key="f_call_pct").value == 25.0 and at.number_input(key="f_exp_pct").value == 86.0 and at.selectbox(key="s_tenor").value == 7
-    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Interest at", "Premium", "Scenario 2: the loan is", "Scenario 3 at a slot's expiry, refill from:", "Scenario 4 at a slot's expiry, the loan is"]
+    assert [w.label for w in at.sidebar.radio] == ["Sized by", "Built", "Interest at", "Premium", "Scenario 2: the loan is", "Scenario 3 at a slot's expiry, refill from:", "Scenario 4 at a slot's expiry, the loan is", "On a margin call"]
+    at.switch_page("views/call_share_sweep.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert "7-year ATM calls on SPXFP" in at.caption[1].value   # page 3's tenor read on page 4

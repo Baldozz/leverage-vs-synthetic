@@ -1,14 +1,16 @@
-"""Call-share sweep — page 3's scenario 3 (SPX + a sleeve of rolling calls) alone, the size of its call sleeve swept: how the share of the
-capital spent on calls shapes the return / risk profile (page 4 of app/historical_app.py, in the separate-exercise group with page 3).
+"""Call-share sweep — page 3's scenario 3 (SPX + a sleeve of rolling calls) alone, the size of its call sleeve swept: how the composition of the
+mix — % SPX / % calls — shapes its historical return and volatility (page 4 of app/historical_app.py, in the separate-exercise group with page 3).
 
-The share runs 0 % (the long portfolio, exactly scenario 1), then the sidebar's range (5 → 50 % of the capital in premium by default). From
-the five named starts (interactive) the page shows the risk–return frontier of each start, the measures against the share, and a table; from
-every month-end start (Launch button, ≈ 20 minutes the first time, cached) the surface of the annualised return over (start, share), a
-heatmap, the bands across the starts and the across-starts table. Engine: fosim.analytics.call_share_sweep over fosim.analytics.five_scenarios.
-Inputs: the page's sidebar (common.sweep_sidebar); the tenor and the withholding tax are shared.
+The composition runs 100/0 (the long portfolio, exactly scenario 1), then the sidebar's range (95/5 … 50/50 by default, 5 % steps). From the
+five named starts (interactive) the page draws the annualised return and the annualised volatility against the composition, one line per start,
+and a table per start × composition; from every month-end start (Launch button, ≈ 20 minutes the first time, cached) the median across the
+starts with its 5–95 % band joins the chart and an across-starts table follows. Engine: fosim.analytics.call_share_sweep over
+fosim.analytics.five_scenarios. Inputs: the page's sidebar (common.sweep_sidebar); the tenor and the withholding tax are shared.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -20,32 +22,22 @@ import fosim.analytics.call_share_sweep as css
 import fosim.analytics.five_scenarios as fsc
 import fosim.analytics.leverage_stress as lvs
 from common import (
-    GREY,
     LAYOUT,
     M,
-    corrections_cached,
     data_bounds,
+    run_key,
     sweep_cached,
     sweep_grid_cached,
     sweep_setup,
 )
 
-PALETTE = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")   # the dataviz reference palette, slots 1–5: here one per named start, in date order, fixed
-SEQ_BLUES = ["#dbe9fb", "#9ec4f3", "#5a97e3", "#2a78d6", "#1c5cab", "#0d366b"]   # a single-hue sequential ramp for the surface and the heatmap
-INK = "#333333"
-ALIGNED = {"l": 80, "r": 120, "t": 30, "b": 40}
+ALIGNED = {"l": 80, "r": 120, "t": 40, "b": 60}
 MODES = ("the five named starts", "every month-end start")
-MEASURES = (("annualised return", "annualised return", True), ("volatility", "annualised volatility", True), ("max drawdown", "max drawdown", True),
-            ("VaR 99 %", "1-day VaR 99 %", True), ("Sharpe ratio", "Sharpe ratio", False), ("CVaR 99 %", "1-day CVaR 99 %", True))
 
 
 @st.cache_data
 def named_starts() -> dict[str, pd.Timestamp]:
     return fsc.default_starts()
-
-
-def pct(k: float) -> str:
-    return f"{k * 100:g} %"
 
 
 def fmt(v: float, spec: str) -> str:
@@ -55,41 +47,50 @@ def fmt(v: float, spec: str) -> str:
 s = sweep_setup()
 first_day, last_day = data_bounds()
 starts = named_starts()
-START_COLOURS = dict(zip(starts, PALETTE, strict=False))
 spx_px = lvs._load(str(lvs.DAILY_FILE)).set_index("date")["spx_px_last"]
 labels = {f"{lab} — {d:%d %b %Y}, SPX {float(spx_px.loc[d]):,.0f}": (lab, d) for lab, d in starts.items()}
 end = str(last_day.date())
 
 st.title("Call-share sweep — scenario 3")
-st.caption("A separate exercise on page 3's scenario 3 alone — SPX plus a sleeve of rolling calls — with the size of the sleeve swept: what a bigger or smaller share of the capital in calls does to the "
-           "return and the risk of the mix, read on each start's daily path. The notes at the bottom say how.")
+st.caption("A separate exercise on page 3's scenario 3 alone — SPX plus a sleeve of rolling calls — with the size of the sleeve swept on page 3's assumptions: what the composition of the mix, "
+           "% SPX / % calls, does to its historical return, volatility, drawdown, Sharpe ratio, VaR and CVaR, read on each start's daily path; the best composition within a CVaR budget starred. The notes at the bottom say how.")
 if not s.shares:
     st.error("The swept range in the sidebar needs *from* ≤ *to*, a step above zero and, for a premium share, *to* below 100 %.")
     st.stop()
 c_starts, c_mode, c_go = st.columns([3, 1.8, 1.0])
 picked = c_starts.multiselect("Start dates", list(labels), default=list(labels), key="c_starts", help="Each start is held to the last data day. The five named starts: when the data starts, the top and the bottom of the dot-com bubble, the top and the bottom of the GFC.")
-mode = c_mode.radio("Starts", MODES, key="c_mode", horizontal=True, help="The named starts run as the sidebar changes (a few seconds). Every month-end start — the last trading day of each month up to the last start whose whole build has reached its first expiry — runs on the Launch button (about twenty minutes the first time, then cached) and adds the surface, the heatmap and the bands across the starts.")
+mode = c_mode.radio("Starts", MODES, key="c_mode", horizontal=True, help="The named starts run as the sidebar changes (a few seconds). Every month-end start — the last trading day of each month up to the last start whose whole build has reached its first expiry — runs on the Launch button (about twenty minutes the first time, then cached) and adds the median across the starts with its 5–95 % band and the across-starts table.")
 grid_mode = mode == MODES[1]
 runs: list[tuple[str, pd.Timestamp]] = [labels[k] for k in labels if k in picked]
 n_grid = len(css.month_end_starts(last_day, s.tenor, s.build_steps, s.build_unit))
-current = (s, mode)
+current = (run_key(s), mode)   # the ★ settings are read off the sweeps: changing them never asks for a new launch
 launched = st.session_state.get("c_launched")
 if grid_mode:
     c_go.markdown("<div style='height: 1.75rem'></div>", unsafe_allow_html=True)   # the button level with the widgets
     if c_go.button("Launch", key="c_launch", type="primary", width="stretch", disabled=current == launched,
-                   help=f"Runs scenario 3 from every month-end start on the sidebar setup: {n_grid} starts × {len(s.shares)} shares, about {max(1, round(n_grid * len(s.shares) * 0.4 / 60))} minutes the first time. Greyed out while nothing has changed since the last run."):
+                   help=f"Runs scenario 3 from every month-end start on the sidebar setup: {n_grid} starts × {len(s.shares)} compositions, about {max(1, round(n_grid * len(s.shares) * 0.4 / 60))} minutes the first time. Greyed out while nothing has changed since the last run."):
         st.session_state["c_launched"] = current
         st.rerun()
     if launched is None:
-        st.info(f"Press **Launch** to run scenario 3 from every month-end start ({n_grid} starts × {len(s.shares)} shares). The named starts below run on the sidebar as it is.")
+        st.info(f"Press **Launch** to run scenario 3 from every month-end start ({n_grid} starts × {len(s.shares)} compositions). The named starts below run on the sidebar as it is.")
     elif current != launched:
         st.caption("The parameters have changed: the page still shows the last launched run. Press **Launch** to update it.")
 s_run: object = launched[0] if (grid_mode and launched is not None) else s
 assert isinstance(s_run, type(s))
+s_run = replace(s_run, risk_budget=s.risk_budget)   # the launched run, the ★ budget as set now
 if not runs and not (grid_mode and launched is not None):
     st.info("Pick at least one start date.")
     st.stop()
 
+by_premium = s_run.sizing == "premium"
+
+
+def comp(k: float) -> str:
+    """The composition label of a share: '95 / 5' (% SPX / % calls) under premium sizing, the exposure share under exposure sizing."""
+    return f"{(1.0 - k) * 100:g} / {k * 100:g}" if by_premium else f"{k * 100:g} %"
+
+
+x_title = "composition: % SPX / % calls" if by_premium else "SPX-equivalent exposure of the calls (% of the capital)"
 sh = s_run.shares
 step_txt = f" step {(sh[2] - sh[1]) * 100:g}" if len(sh) >= 3 else ""
 shares_txt = f"0 % then {sh[1] * 100:g} → {sh[-1] * 100:g} %{step_txt}" if len(sh) >= 2 else "0 % only"
@@ -99,108 +100,77 @@ build_short = "in one shot" if s_run.build_steps == 1 else f"in {s_run.build_ste
 st.caption(f"Capital {s_run.capital / M:,.0f} m · scenario 3 (SPX + calls) alone, the sleeve sized by {s_run.sizing}, swept {shares_txt} of the capital · built {build_short} · "
            f"{s_run.tenor:g}-year ATM calls on SPXFP at {prem_txt} · tax {s_run.tax_rate:.0%} of the profit at expiry · every start held to {last_day:%d %b %Y}.")
 
-sweeps = {lab: sweep_cached(str(d.date()), end, s_run) for lab, d in runs}
+sweeps = {lab: sweep_cached(str(d.date()), end, run_key(s_run)) for lab, d in runs}
 long_named = pd.concat([f.reset_index().assign(start=lab) for lab, f in sweeps.items()], ignore_index=True) if sweeps else pd.DataFrame()
+grid = sweep_grid_cached(end, run_key(s_run)) if (grid_mode and launched is not None) else pd.DataFrame()
+MEASURES = ("annualised return", "volatility", "max drawdown", "Sharpe ratio", "VaR 95 %", "CVaR 95 %")
+bands = {m: css.grid_bands(grid, m) for m in MEASURES} if len(grid) else {}
+n_starts_g = int(grid["start"].nunique()) if len(grid) else 0
 
-# ---------------- A. the risk–return frontier: one curve per start, the points labelled by the share, the diamond = 0 % = the long portfolio
-st.subheader("Risk and return by call share")
-fig = go.Figure()
-for lab, _ in runs:
-    df, c = sweeps[lab], START_COLOURS.get(lab, GREY)
-    x, y = df["volatility"].astype(float) * 100.0, df["annualised return"].astype(float) * 100.0
-    custom = np.column_stack([df["Sharpe ratio"].astype(float), df["max drawdown"].astype(float)])
-    fig.add_trace(go.Scatter(x=x, y=y, mode="lines+markers+text", name=lab, text=[pct(k) for k in df.index], textposition="top center", textfont={"size": 10, "color": INK},
-                             line={"color": c, "width": 2}, marker={"size": 8, "color": c}, customdata=custom, legendgroup=lab,
-                             hovertemplate=f"{lab} · share %{{text}}<br>return %{{y:.1f}} % a year · volatility %{{x:.1f}} %<br>Sharpe %{{customdata[0]:.2f}} · max drawdown %{{customdata[1]:.0%}}<extra></extra>"))
-    fig.add_trace(go.Scatter(x=[x.iloc[0]], y=[y.iloc[0]], mode="markers", name=f"{lab}: long", legendgroup=lab, showlegend=False,
-                             marker={"symbol": "diamond", "size": 12, "color": "white", "line": {"color": c, "width": 2}},
-                             hovertemplate=f"{lab} · 0 % = long the market<br>return %{{y:.1f}} % a year · volatility %{{x:.1f}} %<extra></extra>"))
-fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="◇ 0 % = long the market (scenario 1)", marker={"symbol": "diamond", "size": 10, "color": "white", "line": {"color": GREY, "width": 2}}))
-fig.update_layout({**LAYOUT, "height": 480, "margin": ALIGNED, "xaxis": {"title": "annualised volatility of the daily NAV returns", "ticksuffix": " %"},
-                   "yaxis": {"title": "annualised return", "ticksuffix": " %", "zeroline": True, "zerolinecolor": GREY}})
-st.plotly_chart(fig, width="stretch")
+# ---------------- one heat map per start: the measures (rows) by composition — SPX exposure / call exposure (columns)
+BLUES = ["#e4eefb", "#9ec4f3", "#2a78d6", "#0d366b"]
+ORANGES = ["#fdeedd", "#f6b97e", "#eb6834", "#8a2a05"]
+REDS_DOWN = ["#8a1515", "#e07070", "#f6c6c6", "#fdeeee"]   # a negative number: the most negative darkest (drawdown, worst window)
+REDS_UP = ["#fdeeee", "#f6c6c6", "#e07070", "#8a1515"]     # a probability of loss: the higher darkest
+PURPLES = ["#efe7f7", "#c4a7e3", "#8a5cc6", "#4b2a80"]     # the 1-day tail loss: the heavier darkest
+GREENS = ["#e3f4ec", "#8fd4b1", "#1baf7a", "#0b5c3f"]
+INK = "#333333"
+# (column, row label, colour-bar title, colour scale, number format, multiplier, suffix)
+ROWS: list[tuple[str, str, str, list[str], str, float, str]] = [
+    ("annualised return", "annualised return", "return<br>% a year", BLUES, "+.1f", 100.0, " %"),
+    ("volatility", "volatility", "volatility<br>% a year", ORANGES, ".1f", 100.0, " %"),
+    ("max drawdown", "max drawdown", "max drawdown<br>% of the NAV", REDS_DOWN, ".0f", 100.0, " %"),
+    ("Sharpe ratio", "Sharpe ratio", "Sharpe<br>ratio", GREENS, ".2f", 1.0, ""),
+    ("VaR 95 %", "1-day VaR 95 %", "1-day VaR 95 %<br>% of the NAV", REDS_UP, ".2f", 100.0, " %"),
+    ("CVaR 95 %", "1-day CVaR 95 %", "1-day CVaR 95 %<br>% of the NAV", PURPLES, ".2f", 100.0, " %"),
+]
 
-# ---------------- B. the measures against the share, one line per start
-fig2 = make_subplots(rows=2, cols=3, subplot_titles=[m[1] for m in MEASURES], shared_xaxes=True, vertical_spacing=0.16, horizontal_spacing=0.07)
-for i, (row_name, _, is_pct) in enumerate(MEASURES):
-    r, col = divmod(i, 3)
-    for lab, _ in runs:
-        df, c = sweeps[lab], START_COLOURS.get(lab, GREY)
-        y = df[row_name].astype(float) * (100.0 if is_pct else 1.0)
-        fig2.add_trace(go.Scatter(x=[k * 100.0 for k in df.index], y=y, mode="lines+markers", name=lab, legendgroup=lab, showlegend=i == 0,
-                                  line={"color": c, "width": 2}, marker={"size": 6, "color": c}, hovertemplate=f"{lab} · share %{{x:g}} %<br>%{{y:.2f}}{' %' if is_pct else ''}<extra></extra>"), row=r + 1, col=col + 1)
-    fig2.update_yaxes(ticksuffix=" %" if is_pct else "", row=r + 1, col=col + 1)
-    fig2.update_xaxes(ticksuffix=" %", row=r + 1, col=col + 1)
-for col in (1, 2, 3):
-    fig2.update_xaxes(title_text="call share (% of the capital)", row=2, col=col)
-fig2.add_vline(x=0.0, line={"dash": "dot", "color": GREY, "width": 1}, row=1, col=1)
-fig2.add_annotation(x=0.0, y=1.0, yref="y domain", text="0 % = long", showarrow=False, xanchor="left", font={"size": 10, "color": GREY}, row=1, col=1)
-fig2.update_layout({**LAYOUT, "height": 560, "margin": ALIGNED})
-st.plotly_chart(fig2, width="stretch")
+def comp_axis(k: float) -> str:
+    """The column label of a composition: the SPX exposure and the call exposure, % of the capital."""
+    return f"SPX {(1.0 - k) * 100:g} %<br>calls {k * 100:g} %" if by_premium else f"calls {k * 100:g} %<br>of exposure"
 
-# ---------------- C. every month-end start (after Launch): the surface / heatmap of the return, the bands across the starts, the across-starts table
-grid = pd.DataFrame()
-if grid_mode and launched is not None:
-    grid = sweep_grid_cached(end, s_run)
+
+def cell(v: float, spec: str, suffix: str) -> str:
+    if pd.isna(v):
+        return "—"
+    if np.isinf(v):
+        return "∞"
+    return f"{v:{spec}}{suffix}"
+
+
+def heat_map(df: pd.DataFrame, title: str) -> go.Figure:
+    """One row per measure (``ROWS``), one column per composition, the value written in each cell, each row on its own colour scale; the ★
+    composition (``call_share_sweep.best_share`` on the sidebar's measure and budget) framed."""
+    xs = [comp_axis(float(k)) for k in df.index]
+    n = len(ROWS)
+    fig = make_subplots(rows=n, cols=1, shared_xaxes=True, vertical_spacing=0.025)
+    for i, (col, label, bar, scale, spec, mult, suffix) in enumerate(ROWS, start=1):
+        v = df[col].astype(float).to_numpy() * mult
+        finite = v[np.isfinite(v)]
+        z = np.where(np.isinf(v), (finite.max() * 1.1 if finite.size else 0.0), v)   # an infinite Omega coloured as the top of its row
+        fig.add_trace(go.Heatmap(x=xs, y=[label], z=[z], text=[[cell(x, spec, suffix) for x in v]], texttemplate="%{text}", textfont={"size": 12}, colorscale=scale,
+                                 colorbar={"title": {"text": bar}, "len": 0.9 / n, "y": 1.0 - (i - 0.5) / n, "thickness": 12}, hovertemplate=f"%{{x}}<br>{label} %{{text}}<extra></extra>"), row=i, col=1)
+        fig.update_xaxes(type="category", row=i, col=1)
+    fig.update_xaxes(title_text=x_title, row=n, col=1)
+    j = list(df.index).index(css.best_share(df, s_run.risk_budget, "CVaR 95 %"))
+    fig.add_vrect(x0=j - 0.5, x1=j + 0.5, line={"color": INK, "width": 3}, fillcolor="rgba(0, 0, 0, 0)", row="all", col=1)
+    fig.add_annotation(x=j, y=1.0, xref="x", yref="paper", yanchor="bottom", yshift=4, text=f"★ best within the {STAR_TXT} budget: {xs[j].replace('<br>', ' / ')}", showarrow=False, font={"size": 11, "color": INK})
+    fig.update_layout({**LAYOUT, "height": 110 * n + 140, "margin": {**ALIGNED, "t": 70}, "showlegend": False, "title": {"text": title, "x": 0.02, "font": {"size": 15}}})
+    return fig
+
+
+STAR_TXT = "1-day CVaR 95 %"
+BUDGET_TXT = f"{s_run.risk_budget * 100:g} points of the NAV"
+for lab, d in runs:
+    st.subheader(f"Start {d:%d %b %Y} — {lab}, SPX {float(spx_px.loc[d]):,.0f}")
+    st.plotly_chart(heat_map(sweeps[lab], f"From {d:%d %b %Y}: return, volatility, max drawdown, Sharpe ratio, VaR and CVaR by composition"), width="stretch")
+if bands:
     starts_g = sorted(pd.Timestamp(d) for d in grid["start"].unique())
-    st.subheader(f"Every month-end start, {starts_g[0]:%b %Y} → {starts_g[-1]:%b %Y} ({len(starts_g)} starts)")
-    view = st.radio("View", ("surface", "heatmap"), key="c_view", horizontal=True, help="The same numbers: the annualised return of scenario 3 by start date and call share, as a 3-D surface to see the shape or as a heatmap to read values.")
-    Z = css.surface_table(grid, "annualised return") * 100.0
-    xs = [pd.Timestamp(c).strftime("%Y-%m-%d") for c in Z.columns]
-    ys = [float(k) * 100.0 for k in Z.index]
-    zs = Z.to_numpy().tolist()
-    colorbar = {"title": {"text": "return, % a year"}, "ticksuffix": " %"}
-    hover = "start %{x|%b %Y} · share %{y:g} %<br>return %{z:.1f} % a year<extra></extra>"
-    if view == "surface":
-        fig3 = go.Figure(go.Surface(x=xs, y=ys, z=zs, colorscale=SEQ_BLUES, colorbar=colorbar, hovertemplate=hover, name="annualised return"))
-        fig3.update_layout({**LAYOUT, "height": 640, "margin": {"l": 0, "r": 0, "t": 30, "b": 0}, "showlegend": False,
-                            "scene": {"xaxis": {"type": "date", "title": {"text": "start"}, "tickformat": "%Y"}, "yaxis": {"title": {"text": "call share (% of the capital)"}, "ticksuffix": " %"},
-                                      "zaxis": {"title": {"text": "annualised return (%)"}}, "camera": {"eye": {"x": 1.7, "y": -1.7, "z": 0.8}}, "aspectratio": {"x": 1.6, "y": 1.0, "z": 0.7}}})
-    else:
-        fig3 = go.Figure(go.Heatmap(x=xs, y=ys, z=zs, colorscale=SEQ_BLUES, colorbar=colorbar, hovertemplate=hover, name="annualised return"))
-        corr = corrections_cached(0.20, s_run.wht, "price")
-        for _, row in corr.iterrows():
-            for day, dash in ((row["peak"], "dot"), (row["trough"], "dash")):
-                fig3.add_vline(x=pd.Timestamp(day).strftime("%Y-%m-%d"), line={"dash": dash, "color": INK, "width": 1})
-        for lab, d in starts.items():
-            fig3.add_annotation(x=d.strftime("%Y-%m-%d"), y=1.0, yref="y domain", text=lab, showarrow=False, xanchor="left", yanchor="bottom", font={"size": 10, "color": START_COLOURS.get(lab, GREY)})
-        fig3.update_layout({**LAYOUT, "height": 480, "margin": ALIGNED, "showlegend": False, "xaxis": {"title": "start date"}, "yaxis": {"title": "call share (% of the capital)", "ticksuffix": " %"}})
-    st.plotly_chart(fig3, width="stretch")
-    st.caption("Dotted / dashed verticals on the heatmap: market peaks / bottoms (the SPX price index corrections of 20 % or more); the named starts labelled at the top.")
+    st.subheader(f"Every month-end start, {starts_g[0]:%b %Y} → {starts_g[-1]:%b %Y} ({n_starts_g} starts): the median")
+    med = pd.DataFrame({m: bands[m]["median"] for m in bands})
+    st.plotly_chart(heat_map(med, f"Median of the {n_starts_g} month-end starts, by composition"), width="stretch")
 
-    bands = {m: css.grid_bands(grid, m) for m in ("annualised return", "volatility")}
-    fig4 = make_subplots(rows=1, cols=2, subplot_titles=("annualised return", "annualised volatility"), horizontal_spacing=0.08)
-    for col, (m, b) in enumerate(bands.items(), start=1):
-        xb = [float(k) * 100.0 for k in b.index]
-        fig4.add_trace(go.Scatter(x=xb, y=b["p95"] * 100.0, mode="lines", name="95th percentile", line={"color": PALETTE[0], "width": 1, "dash": "dot"}, showlegend=col == 1, legendgroup="band",
-                                  hovertemplate="share %{x:g} % · 95th %{y:.1f} %<extra></extra>"), row=1, col=col)
-        fig4.add_trace(go.Scatter(x=xb, y=b["p5"] * 100.0, mode="lines", name="5th percentile", line={"color": PALETTE[0], "width": 1, "dash": "dot"}, fill="tonexty", fillcolor="rgba(42, 120, 214, 0.15)",
-                                  showlegend=col == 1, legendgroup="band", hovertemplate="share %{x:g} % · 5th %{y:.1f} %<extra></extra>"), row=1, col=col)
-        fig4.add_trace(go.Scatter(x=xb, y=b["median"] * 100.0, mode="lines+markers", name=f"median of the {len(starts_g)} starts", line={"color": PALETTE[0], "width": 2.5}, marker={"size": 6},
-                                  showlegend=col == 1, legendgroup="median", hovertemplate="share %{x:g} % · median %{y:.1f} %<extra></extra>"), row=1, col=col)
-        for lab, _ in runs:
-            df = sweeps[lab]
-            fig4.add_trace(go.Scatter(x=[k * 100.0 for k in df.index], y=df[m].astype(float) * 100.0, mode="lines", name=lab, legendgroup=lab, showlegend=col == 1, opacity=0.6,
-                                      line={"color": START_COLOURS.get(lab, GREY), "width": 1}, hovertemplate=f"{lab} · share %{{x:g}} % · %{{y:.1f}} %<extra></extra>"), row=1, col=col)
-        fig4.update_xaxes(title_text="call share (% of the capital)", ticksuffix=" %", row=1, col=col)
-        fig4.update_yaxes(ticksuffix=" %", row=1, col=col)
-    fig4.update_layout({**LAYOUT, "height": 400, "margin": ALIGNED})
-    st.plotly_chart(fig4, width="stretch")
-    worst_dd = css.surface_table(grid, "max drawdown").min(axis=1)
-    b_sh = css.grid_bands(grid, "Sharpe ratio")
-    across = pd.DataFrame({
-        "median return": [f"{v:+.1%}" for v in bands["annualised return"]["median"]],
-        "5th – 95th": [f"{lo:+.1%} … {hi:+.1%}" for lo, hi in zip(bands["annualised return"]["p5"], bands["annualised return"]["p95"], strict=True)],
-        "median volatility": [f"{v:.1%}" for v in bands["volatility"]["median"]],
-        "median Sharpe": [fmt(v, ".2f") for v in b_sh["median"]],
-        "worst max drawdown": [f"{v:.0%}" for v in worst_dd.reindex(bands["volatility"].index)],
-        "ahead of long": [fmt(v, ".0%") for v in bands["annualised return"]["ahead of 0 %"]],
-    }, index=pd.Index([pct(float(k)) for k in bands["annualised return"].index], name="call share"))
-    st.table(across)
-    st.caption(f"Across the {len(starts_g)} month-end starts, per call share: the median and the 5th–95th percentiles of the annualised return, the median volatility and Sharpe ratio, "
-               "the deepest max drawdown of any start, and the share of the starts on which the mix beats the long portfolio (0 %) on its own start.")
-
-# ---------------- D. the table per start × share, and the CSV
+# ---------------- the tables: per start × composition; across the month-end starts once launched
 st.markdown("""<style>
 div[data-testid="stTable"] table { font-size: 0.9rem; table-layout: fixed; width: 100%; }
 div[data-testid="stTable"] th, div[data-testid="stTable"] td { white-space: normal !important; overflow-wrap: anywhere; padding: 0.35rem 0.5rem; vertical-align: top; line-height: 1.3; }
@@ -211,35 +181,49 @@ if runs:
     index: list[str] = []
     for lab, _ in runs:
         df = sweeps[lab]
-        for name, row_name, spec in (("return", "annualised return", "+.1%"), ("vol", "volatility", ".1%"), ("Sharpe", "Sharpe ratio", ".2f"), ("max DD", "max drawdown", ".0%")):
-            index.append(f"{lab} · {name}")
+        for col, label, _bar, _scale, spec, mult, suffix in ROWS:
+            index.append(f"{lab} · {label}")
             for k in df.index:
-                cells.setdefault(pct(float(k)), []).append(fmt(df.loc[k, row_name], spec))
+                cells.setdefault(comp(float(k)), []).append(cell(float(df.loc[k, col]) * mult, spec, suffix))
     st.table(pd.DataFrame(cells, index=pd.Index(index, name=" ")))
-    st.caption("Per start and call share: the annualised return, the annualised volatility of the daily NAV returns, the Sharpe ratio against the 3-month T-bill and the max drawdown, all to the last data day.")
+    st.caption("Per start and composition: the heat maps' numbers, all to the last data day.")
+if bands:
+    worst_dd = css.surface_table(grid, "max drawdown").min(axis=1)
+    across = pd.DataFrame({
+        "median return": [f"{v:+.1%}" for v in bands["annualised return"]["median"]],
+        "5th – 95th": [f"{lo:+.1%} … {hi:+.1%}" for lo, hi in zip(bands["annualised return"]["p5"], bands["annualised return"]["p95"], strict=True)],
+        "median volatility": [f"{v:.1%}" for v in bands["volatility"]["median"]],
+        "median Sharpe": [fmt(v, ".2f") for v in bands["Sharpe ratio"]["median"]],
+        "median CVaR 95 %": [f"{v:.2%}" for v in bands["CVaR 95 %"]["median"]],
+        "worst max drawdown": [f"{v:.0%}" for v in worst_dd.reindex(bands["annualised return"].index)],
+        "ahead of long": [fmt(v, ".0%") for v in bands["annualised return"]["ahead of 0 %"]],
+    }, index=pd.Index([comp(float(k)) for k in bands["annualised return"].index], name="composition"))
+    st.table(across)
+    st.caption(f"Across the {n_starts_g} month-end starts, {starts_g[0]:%b %Y} → {starts_g[-1]:%b %Y}, per composition: the median and the 5th–95th percentiles of the annualised return, the median volatility, "
+               "Sharpe ratio and 1-day CVaR 95 %, the deepest max drawdown of any start, and the share of the starts on which the mix beats the long portfolio (100 / 0) on its own start.")
 export = pd.concat([long_named.assign(starts="named")] + ([grid.assign(starts="month-end")] if len(grid) else []), ignore_index=True) if len(long_named) or len(grid) else pd.DataFrame()
 if len(export):
     st.download_button("Download the sweep as CSV", export.to_csv(index=False).encode(), f"call_share_sweep_to_{last_day:%Y-%m-%d}.csv", "text/csv")
 
-# ---------------- E. the notes
+# ---------------- the notes
 st.markdown("##### Notes")
 rule = "its share of the whole portfolio, SPX sold or bought for the difference" if s_run.rebalance == "portfolio" else "the after-tax proceeds only, the SPX untouched"
 st.caption(f"""**Setup** (the sidebar; Assumptions 41)
 - **Scenario 3 alone**: the capital ({s_run.capital / M:,.0f} m) in SPX less the premium of a sleeve of rolling {s_run.tenor:g}-year ATM calls on SPXFP at {prem_txt}, built {build_short}, the money waiting in SPX; at a slot's expiry {s_run.tax_rate:.0%} tax on the profit, then the slot refilled to {rule}. Page 3's other four scenarios are not run.
-- **The swept share**: {"the premium spent, as a share of the capital" if s_run.sizing == "premium" else "the SPX-equivalent exposure carried, as a share of the capital (the premium follows from the model's delta)"} — {shares_txt}. Everything else is fixed across the sweep; the premium per call stays {prem_txt} whatever the share.
-- **0 %** buys no call at all: scenario 3 at 0 % is the long portfolio, page 3's scenario 1, to the cent — the diamond on the frontier.
+- **The composition**: {"the premium spent, as a share of the capital, the rest in SPX — 95 / 5 means 95 % SPX, 5 % calls" if by_premium else "the SPX-equivalent exposure carried by the calls, as a share of the capital (the premium follows from the model's delta, the rest in SPX)"} — {shares_txt}. Everything else is fixed across the sweep; the premium per call stays {prem_txt} whatever the size of the sleeve.
+- **100 / 0** buys no call at all: scenario 3 is then the long portfolio, page 3's scenario 1, to the cent.
 - **Starts**: the five named starts of page 3 (the data start, the dot-com peak and bottom, the GFC peak and bottom), each held to {last_day:%d %b %Y}; or every month-end start — the last trading day of each calendar month, up to the last start whose whole build has reached its first expiry on the end day ({n_grid} starts on this setup).""")
-st.caption("""**Reading the charts**
-- **Frontier**: annualised volatility across, annualised return up — up and to the left is better. One curve per start, the points in share order and labelled; a curve that folds back means more calls stopped adding return. The diamond is 0 %, the long portfolio.
-- **Measures against the share**: the same numbers one at a time. Max drawdown is negative (the fall from the running peak); the 1-day VaR and CVaR at 99 % are losses, positive, as a % of the NAV; Sharpe = (annualised return − the 3-month T-bill averaged over the period) ÷ volatility.
-- **Surface / heatmap** (month-end starts): the annualised return by start date and call share; each node is a full run, the surface shades between nodes. The heatmap reads values better; the surface shows the shape.
-- **Bands**: the median and the empirical 5th–95th percentiles across the month-end starts at each share, the named starts drawn thin on top — a spread of history, not a confidence interval.""")
+st.caption(f"""**Reading the heat maps**
+- One per start. **Columns**: the composition — the SPX exposure and the call exposure, % of the capital. **Rows**: the annualised return of that mix from the start to the last data day; the annualised volatility of its daily NAV returns (standard deviation × √252); the max drawdown (the deepest fall from a running peak); the Sharpe ratio ((return − the 3-month T-bill averaged over the period) ÷ volatility); the 1-day VaR 95 % (the loss not exceeded on 95 % of days) and CVaR 95 % (the average loss on the worst 5 % of days), % of the NAV, historical. The value is written in each cell, the colour scales it row by row. Each cell is one full run of scenario 3.
+- **★ best**: the framed column is the composition with the highest return among those whose {STAR_TXT} exceeds the long portfolio's (100 / 0) by at most {BUDGET_TXT} on the same start — the upside bought without breaking the tail-loss budget (the sidebar sets the budget).
+- **Beyond 50 / 50** (the default range runs to 5 / 95): from the starts after the dot-com bust the return keeps rising with the call share while the drawdown runs towards −100 %; from the 2000 peak the mix turns negative past 80 % calls. 0 / 100 is page 3's scenario 5 (all in calls, its own rules), not shown here.
+- **Month-end starts** (once launched): one more heat map with the median across the starts at each composition, the same rule on the medians.""")
 st.caption("""**Reading the tables**
-- **Per start × share**: return · volatility · Sharpe · max drawdown, as on page 3's tables (the risk measures on the daily NAV returns, to the wipe-out day if ever).
-- **Across the starts** (month-end mode): the percentiles across starts at each share; *ahead of long* = the share of the starts on which that mix beats 0 % on the same start.
-- **CSV**: every (start, share) row of the sweep with the whole summary of the run.""")
+- **Per start × composition**: the heat maps' numbers, as on page 3's tables (the risk measures on the daily NAV returns, to the wipe-out day if ever).
+- **Across the starts** (month-end mode): the percentiles across starts at each composition; *ahead of long* = the share of the starts on which that mix beats 100 / 0 on the same start.
+- **CSV**: every (start, composition) row of the sweep with the whole summary of the run.""")
 st.caption("""**Caveats**
-- Consecutive month-end starts overlap: the bands are a spread of one history, not independent draws; recent starts whose build has not reached an expiry are left out.
+- Consecutive month-end starts overlap: the band is a spread of one history, not independent draws; recent starts whose build has not reached an expiry are left out.
 - A bigger sleeve does not move the premium in the model: every call costs the same share of notional whatever the size of the order.
-- Between expiries the calls are marked by the model (Black–Scholes at the vol the premium implies), so the volatility and the tail of the call-heavy mixes are model figures.
+- Between expiries the calls are marked by the model (Black–Scholes at the vol the premium implies): a window ending between expiries reads a model price.
 - For illustrative purposes only.""")
